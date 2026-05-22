@@ -1015,7 +1015,8 @@ def ngn_market_overview(query: str = "") -> str:
     This is the critical dual-rate context every Nigerian fintech treasury team needs.
     Input: optional base currency e.g. "USD", "GBP", "EUR". Defaults to USD.
     """
-    base = clean_input(query).upper().split()[0] if query.strip() else "USD"
+    parts = clean_input(query).upper().split()
+    base = parts[0] if parts else "USD"
 
     official_rate = get_rate_raw(base, "NGN")
     if not official_rate:
