@@ -161,18 +161,28 @@ def seed_demo_data():
     print("🌱 Seeding demo corridor data (90 days)...")
 
     corridors = [
-        # Diaspora remittance — primary revenue corridors for Nigerian fintechs
+        # ── Diaspora remittance into Nigeria ──────────────────────
         ("GBP", "NGN", 1990, 0.028),    # UK → Nigeria (highest txn count, UK diaspora)
         ("USD", "NGN", 1570, 0.025),    # US → Nigeria (largest USD volume)
         ("EUR", "NGN", 1720, 0.027),    # EU → Nigeria
         ("CAD", "NGN", 1150, 0.030),    # Canada → Nigeria (fast-growing corridor)
-        # Pan-African corridors
-        ("USD", "GHS", 15.5, 0.020),    # US → Ghana
-        ("GBP", "GHS", 19.6, 0.022),    # UK → Ghana
-        ("USD", "KES", 129,  0.018),    # US → Kenya (East Africa gateway)
-        ("GBP", "KES", 163,  0.021),    # UK → Kenya
-        ("USD", "XOF", 620,  0.022),    # US → Francophone West Africa (8 UEMOA countries)
-        ("USD", "ZAR", 18.5, 0.015),    # US → South Africa
+        ("AED", "NGN",  428, 0.032),    # UAE → Nigeria (large Gulf diaspora)
+        ("AUD", "NGN", 1020, 0.031),    # Australia → Nigeria (growing corridor)
+        ("CHF", "NGN", 1760, 0.026),    # Switzerland → Nigeria
+        # ── Pan-African: West Africa ──────────────────────────────
+        ("USD", "GHS",  15.5, 0.020),   # US → Ghana
+        ("GBP", "GHS",  19.6, 0.022),   # UK → Ghana
+        ("EUR", "GHS",  17.1, 0.021),   # EU → Ghana
+        ("USD", "XOF", 620,   0.022),   # US → Francophone West Africa (UEMOA)
+        ("EUR", "XOF", 655,   0.018),   # EU → Francophone West Africa (pegged to EUR)
+        # ── Pan-African: East Africa ──────────────────────────────
+        ("USD", "KES", 129,   0.018),   # US → Kenya (East Africa gateway)
+        ("GBP", "KES", 163,   0.021),   # UK → Kenya
+        ("USD", "TZS", 2550,  0.023),   # US → Tanzania
+        ("USD", "UGX", 3720,  0.025),   # US → Uganda
+        # ── Pan-African: Southern Africa ─────────────────────────
+        ("USD", "ZAR",  18.5, 0.015),   # US → South Africa
+        ("GBP", "ZAR",  23.4, 0.017),   # UK → South Africa
     ]
 
     providers = ["Stanbic IBTC", "Access Bank", "Fidelity Bank", "Ecobank", "Verto FX", "Flutterwave", "Nium"]

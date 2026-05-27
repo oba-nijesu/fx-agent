@@ -8,18 +8,28 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 // ── Static options (hardcoded — no server fetch needed) ───────
 const CORRIDOR_OPTIONS = [
+  // Diaspora remittance into Nigeria
   { value: "GBP>NGN", label: "GBP → NGN", desc: "UK · Nigeria" },
   { value: "USD>NGN", label: "USD → NGN", desc: "US · Nigeria" },
   { value: "EUR>NGN", label: "EUR → NGN", desc: "EU · Nigeria" },
   { value: "CAD>NGN", label: "CAD → NGN", desc: "Canada · Nigeria" },
+  { value: "AED>NGN", label: "AED → NGN", desc: "UAE · Nigeria" },
+  { value: "AUD>NGN", label: "AUD → NGN", desc: "Australia · Nigeria" },
+  { value: "CHF>NGN", label: "CHF → NGN", desc: "Switzerland · Nigeria" },
+  // West Africa
   { value: "USD>GHS", label: "USD → GHS", desc: "US · Ghana" },
   { value: "GBP>GHS", label: "GBP → GHS", desc: "UK · Ghana" },
+  { value: "EUR>GHS", label: "EUR → GHS", desc: "EU · Ghana" },
+  { value: "USD>XOF", label: "USD → XOF", desc: "US · Francophone W. Africa" },
+  { value: "EUR>XOF", label: "EUR → XOF", desc: "EU · Francophone W. Africa" },
+  // East Africa
   { value: "USD>KES", label: "USD → KES", desc: "US · Kenya" },
   { value: "GBP>KES", label: "GBP → KES", desc: "UK · Kenya" },
-  { value: "USD>XOF", label: "USD → XOF", desc: "US · Francophone W. Africa" },
+  { value: "USD>TZS", label: "USD → TZS", desc: "US · Tanzania" },
+  { value: "USD>UGX", label: "USD → UGX", desc: "US · Uganda" },
+  // Southern Africa
   { value: "USD>ZAR", label: "USD → ZAR", desc: "US · South Africa" },
-  { value: "GBP>EUR", label: "GBP → EUR", desc: "UK · Europe" },
-  { value: "USD>EUR", label: "USD → EUR", desc: "US · Europe" },
+  { value: "GBP>ZAR", label: "GBP → ZAR", desc: "UK · South Africa" },
 ];
 
 const PROVIDER_OPTIONS = [
