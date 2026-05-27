@@ -2,6 +2,24 @@ import { useState, useEffect, useRef, useCallback, Component } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
+// Dark theme tokens
+const T = {
+  bg:       "#0a0a0f",
+  surface:  "#111118",
+  border:   "#1e1e2a",
+  border2:  "#252532",
+  text:     "#e8e8f0",
+  muted:    "#888899",
+  faint:    "#444455",
+  accent:   "#00d4aa",
+  accentDim:"#00d4aa22",
+  accentBorder:"#00d4aa55",
+  gold:     "#f0a030",
+  red:      "#ff5555",
+  redDim:   "#ff555522",
+  redBorder:"#ff555544",
+};
+
 const CORRIDORS = [
   { value: "GBP>NGN", label: "GBP → NGN" }, { value: "USD>NGN", label: "USD → NGN" },
   { value: "EUR>NGN", label: "EUR → NGN" }, { value: "CAD>NGN", label: "CAD → NGN" },
@@ -33,17 +51,15 @@ class ErrorBoundary extends Component {
   static getDerivedStateFromError(e) { return { error: e }; }
   render() {
     if (this.state.error) return (
-      <div style={{ padding: 32, textAlign: "center", fontFamily: "system-ui", marginTop: 60 }}>
-        <div style={{ fontSize: 28, marginBottom: 12 }}>⚠️</div>
-        <div style={{ color: "#e53e3e", fontWeight: 600 }}>Something went wrong</div>
-        <div style={{ color: "#999", fontSize: 13, marginTop: 8, marginBottom: 20 }}>
-          {this.state.error.message}
+      <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui" }}>
+        <div style={{ textAlign: "center", maxWidth: 420, padding: 32 }}>
+          <div style={{ fontSize: 28, marginBottom: 12 }}>⚠️</div>
+          <div style={{ color: T.red, fontWeight: 600, marginBottom: 8 }}>Something went wrong</div>
+          <div style={{ color: T.faint, fontSize: 13, marginBottom: 24 }}>{this.state.error.message}</div>
+          <button onClick={() => window.location.reload()} style={{ background: T.accentDim, border: `1px solid ${T.accentBorder}`, borderRadius: 8, padding: "8px 20px", fontSize: 13, color: T.accent, cursor: "pointer" }}>
+            Reload
+          </button>
         </div>
-        <button onClick={() => window.location.reload()} style={{
-          background: "#E1F5EE", border: "1px solid #1D9E75",
-          borderRadius: 8, padding: "7px 20px", fontSize: 13,
-          color: "#0F6E56", cursor: "pointer", fontFamily: "inherit",
-        }}>Reload</button>
       </div>
     );
     return this.props.children;
@@ -63,11 +79,10 @@ const getTenantId = () => {
 const newSessionId = () =>
   `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const corridorLabel = (value) =>
-  CORRIDORS.find((c) => c.value === value)?.label || value;
+const corridorLabel = (v) => CORRIDORS.find((c) => c.value === v)?.label || v;
 
 // ── Onboarding ────────────────────────────────────────────────
-function Onboarding({ serverUp, onRetry, onComplete }) {
+function Onboarding({ serverUp, waking, onRetry, onComplete }) {
   const [step, setStep]           = useState(1);
   const [company, setCompany]     = useState("");
   const [corridors, setCorridors] = useState([]);
@@ -95,8 +110,7 @@ function Onboarding({ serverUp, onRetry, onComplete }) {
         body: JSON.stringify({
           tenant_id: getTenantId(),
           company_name: company.trim(),
-          corridors,
-          providers,
+          corridors, providers,
           spread_threshold: 3.0,
           alert_email: "",
         }),
@@ -106,12 +120,10 @@ function Onboarding({ serverUp, onRetry, onComplete }) {
     } catch (e) {
       setError(
         e.message === "Failed to fetch"
-          ? "Cannot reach server. Start it: uvicorn server:app --reload --port 8000"
+          ? "Cannot reach server. Click Retry — it may still be waking up."
           : e.message
       );
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   const next = () => {
@@ -121,174 +133,139 @@ function Onboarding({ serverUp, onRetry, onComplete }) {
     setError(""); setStep((s) => s + 1);
   };
 
-  const StepDot = ({ n }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <div style={{
-        width: 8, height: 8, borderRadius: "50%",
-        background: step >= n ? "#1D9E75" : "#ddd",
-        boxShadow: step === n ? "0 0 0 3px #9FE1CB55" : "none",
-        transition: "all 0.2s",
-      }} />
-      <span style={{ fontSize: 12, color: step === n ? "#555" : "#aaa" }}>
-        {["Company", "Corridors", "Providers"][n - 1]}
-      </span>
-    </div>
-  );
-
   const Chip = ({ label, active, onClick }) => (
     <button onClick={onClick} style={{
       padding: "5px 12px", borderRadius: 20, cursor: "pointer",
       fontSize: 13, fontFamily: "inherit", transition: "all 0.15s",
-      border: `1px solid ${active ? "#1D9E75" : "#ddd"}`,
-      background: active ? "#E1F5EE" : "#f9f9f9",
-      color: active ? "#0F6E56" : "#555",
+      border: `1px solid ${active ? T.accent : T.border2}`,
+      background: active ? T.accentDim : T.surface,
+      color: active ? T.accent : T.muted,
     }}>{label}</button>
   );
 
+  const stepLabels = ["Company", "Corridors", "Providers"];
+
   return (
-    <div style={{
-      padding: 28, display: "flex", flexDirection: "column", gap: 20,
-      background: "#fff", border: "1px solid #e0e0e0", borderRadius: 12,
-      maxWidth: 560, margin: "32px auto", fontFamily: "system-ui, sans-serif",
-    }}>
-      <div>
-        <div style={{ fontSize: 20, fontWeight: 500, color: "#111" }}>FXAgent</div>
-        <div style={{ fontSize: 12, color: "#aaa", fontFamily: "monospace", marginTop: 3 }}>
-          Nigerian fintech edition
-        </div>
-      </div>
+    <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "system-ui, sans-serif" }}>
+      <style>{`input,button{font-family:inherit} input:focus{outline:2px solid ${T.accent};outline-offset:0} input{box-sizing:border-box}`}</style>
 
-      {serverUp === false && (
-        <div style={{
-          background: "#fff5f5", border: "1px solid #fc8181",
-          borderRadius: 8, padding: "10px 14px",
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-        }}>
-          <span style={{ fontSize: 13, color: "#e53e3e" }}>
-            ⚠ Server not running —{" "}
-            <code style={{ fontSize: 12 }}>uvicorn server:app --reload --port 8000</code>
-          </span>
-          <button onClick={onRetry} style={{
-            marginLeft: 12, background: "none", border: "1px solid #fc8181",
-            borderRadius: 6, padding: "3px 10px", fontSize: 12,
-            color: "#e53e3e", cursor: "pointer", whiteSpace: "nowrap",
-          }}>Retry</button>
-        </div>
-      )}
-      {serverUp === true && (
-        <div style={{
-          background: "#f0fdf4", border: "1px solid #68d391",
-          borderRadius: 8, padding: "8px 14px",
-          display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#276749",
-        }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#1D9E75" }} />
-          Server connected
-        </div>
-      )}
+      <div style={{ width: "100%", maxWidth: 560, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, padding: 32, display: "flex", flexDirection: "column", gap: 24 }}>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <StepDot n={1} />
-        <div style={{ flex: 1, height: 1, background: step > 1 ? "#1D9E75" : "#e0e0e0" }} />
-        <StepDot n={2} />
-        <div style={{ flex: 1, height: 1, background: step > 2 ? "#1D9E75" : "#e0e0e0" }} />
-        <StepDot n={3} />
-      </div>
-
-      {step === 1 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <h2 style={{ fontSize: 18, fontWeight: 500, color: "#111" }}>Welcome to FXAgent</h2>
-            <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6, marginTop: 6 }}>
-              Set up your workspace in 3 steps. Personalises the agent for your corridors and providers.
-            </p>
-          </div>
-          <div>
-            <label style={{ fontSize: 13, color: "#555", display: "block", marginBottom: 6 }}>
-              Company name
-            </label>
-            <input
-              ref={inputRef}
-              value={company}
-              onChange={(e) => setCompany(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && next()}
-              placeholder="e.g. Lemfi, Grey, Cleva…"
-              style={{
-                width: "100%", padding: "8px 12px", fontSize: 14,
-                borderRadius: 8, border: "1px solid #ddd",
-                fontFamily: "inherit", color: "#111",
-              }}
-            />
-          </div>
+        {/* Logo */}
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 600, color: T.text }}>FXAgent</div>
+          <div style={{ fontSize: 12, color: T.accent, fontFamily: "monospace", marginTop: 3 }}>Nigerian fintech edition</div>
         </div>
-      )}
 
-      {step === 2 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <h2 style={{ fontSize: 18, fontWeight: 500, color: "#111" }}>Your active corridors</h2>
-            <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6, marginTop: 6 }}>
-              Select every corridor your company operates.
-            </p>
+        {/* Server banner */}
+        {waking && (
+          <div style={{ background: "#0a1a30", border: "1px solid #2255aa44", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#6699dd" }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#4488cc", animation: "pulse 1.2s infinite" }} />
+            Waking up server… this takes ~30s on first load
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {CORRIDORS.map((c) => (
-              <Chip key={c.value} label={c.label}
-                active={corridors.includes(c.value)}
-                onClick={() => toggleCorridor(c.value)} />
-            ))}
+        )}
+        {!waking && serverUp === false && (
+          <div style={{ background: T.redDim, border: `1px solid ${T.redBorder}`, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ fontSize: 13, color: T.red }}>
+              ⚠ Server not reachable — <code style={{ fontSize: 12 }}>uvicorn server:app --reload --port 8000</code>
+            </span>
+            <button onClick={onRetry} style={{ marginLeft: 12, background: "none", border: `1px solid ${T.red}`, borderRadius: 6, padding: "3px 10px", fontSize: 12, color: T.red, cursor: "pointer", whiteSpace: "nowrap" }}>Retry</button>
           </div>
-          <p style={{ fontSize: 12, color: "#aaa" }}>{corridors.length} selected</p>
-        </div>
-      )}
+        )}
+        {!waking && serverUp === true && (
+          <div style={{ background: "#0a1a14", border: `1px solid ${T.accentBorder}`, borderRadius: 8, padding: "8px 14px", display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: T.accent }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: T.accent }} />
+            Server connected
+          </div>
+        )}
 
-      {step === 3 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <h2 style={{ fontSize: 18, fontWeight: 500, color: "#111" }}>Your liquidity providers</h2>
-            <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6, marginTop: 6 }}>
-              Who do you source FX liquidity from?
-            </p>
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {PROVIDERS.map((p) => (
-              <Chip key={p} label={p}
-                active={providers.includes(p)}
-                onClick={() => toggleProvider(p)} />
-            ))}
-          </div>
-          <p style={{ fontSize: 12, color: "#aaa" }}>{providers.length} selected</p>
-          {providers.length > 0 && company && (
-            <div style={{
-              background: "#f5f5f5", border: "1px solid #e0e0e0",
-              borderRadius: 8, padding: "12px 14px", fontSize: 13, color: "#555", lineHeight: 1.8,
-            }}>
-              <strong style={{ color: "#111" }}>{company}</strong><br />
-              Corridors: {corridors.map(corridorLabel).join(", ")}<br />
-              Providers: {providers.join(", ")}
+        {/* Step dots */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {stepLabels.map((label, i) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, flex: i < 2 ? "1" : "none" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: step >= i + 1 ? T.accent : T.faint, boxShadow: step === i + 1 ? `0 0 0 3px ${T.accentDim}` : "none", transition: "all 0.2s" }} />
+                <span style={{ fontSize: 12, color: step === i + 1 ? T.text : T.faint }}>{label}</span>
+              </div>
+              {i < 2 && <div style={{ flex: 1, height: 1, background: step > i + 1 ? T.accent : T.border }} />}
             </div>
-          )}
+          ))}
         </div>
-      )}
 
-      {error && <p style={{ color: "#e53e3e", fontSize: 13, margin: 0 }}>{error}</p>}
+        {/* Step 1 */}
+        {step === 1 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 600, color: T.text, margin: 0 }}>Welcome to FXAgent</h2>
+              <p style={{ fontSize: 14, color: T.muted, lineHeight: 1.6, marginTop: 8, marginBottom: 0 }}>
+                Set up your workspace in 3 steps. Personalises the agent for your corridors and providers.
+              </p>
+            </div>
+            <div>
+              <label style={{ fontSize: 13, color: T.muted, display: "block", marginBottom: 8 }}>Company name</label>
+              <input
+                ref={inputRef} value={company}
+                onChange={(e) => setCompany(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && next()}
+                placeholder="e.g. Lemfi, Grey, Cleva…"
+                style={{ width: "100%", padding: "10px 12px", fontSize: 14, borderRadius: 8, border: `1px solid ${T.border2}`, background: T.bg, color: T.text }}
+              />
+            </div>
+          </div>
+        )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
-        {step > 1 ? (
-          <button onClick={() => { setError(""); setStep((s) => s - 1); }} style={{
-            background: "none", border: "1px solid #ddd", borderRadius: 8,
-            padding: "7px 16px", fontSize: 13, color: "#555",
-            cursor: "pointer", fontFamily: "inherit",
-          }}>← Back</button>
-        ) : <div />}
-        <button onClick={next} disabled={saving} style={{
-          background: "#E1F5EE", border: "1px solid #1D9E75", borderRadius: 8,
-          padding: "7px 20px", fontSize: 13, fontWeight: 500,
-          color: saving ? "#aaa" : "#0F6E56",
-          cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit",
-        }}>
-          {saving ? "Setting up…" : step < 3 ? "Continue →" : "Get started →"}
-        </button>
+        {/* Step 2 */}
+        {step === 2 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 600, color: T.text, margin: 0 }}>Your active corridors</h2>
+              <p style={{ fontSize: 14, color: T.muted, lineHeight: 1.6, marginTop: 8, marginBottom: 0 }}>Select every corridor your company operates.</p>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {CORRIDORS.map((c) => (
+                <Chip key={c.value} label={c.label} active={corridors.includes(c.value)} onClick={() => toggleCorridor(c.value)} />
+              ))}
+            </div>
+            <p style={{ fontSize: 12, color: T.faint, margin: 0 }}>{corridors.length} selected</p>
+          </div>
+        )}
+
+        {/* Step 3 */}
+        {step === 3 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 600, color: T.text, margin: 0 }}>Your liquidity providers</h2>
+              <p style={{ fontSize: 14, color: T.muted, lineHeight: 1.6, marginTop: 8, marginBottom: 0 }}>Who do you source FX liquidity from?</p>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {PROVIDERS.map((p) => (
+                <Chip key={p} label={p} active={providers.includes(p)} onClick={() => toggleProvider(p)} />
+              ))}
+            </div>
+            <p style={{ fontSize: 12, color: T.faint, margin: 0 }}>{providers.length} selected</p>
+            {providers.length > 0 && company && (
+              <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: T.muted, lineHeight: 1.8 }}>
+                <strong style={{ color: T.text }}>{company}</strong><br />
+                Corridors: {corridors.map(corridorLabel).join(", ")}<br />
+                Providers: {providers.join(", ")}
+              </div>
+            )}
+          </div>
+        )}
+
+        {error && <p style={{ color: T.red, fontSize: 13, margin: 0 }}>{error}</p>}
+
+        {/* Nav */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {step > 1 ? (
+            <button onClick={() => { setError(""); setStep((s) => s - 1); }} style={{ background: "none", border: `1px solid ${T.border2}`, borderRadius: 8, padding: "8px 18px", fontSize: 13, color: T.muted, cursor: "pointer" }}>← Back</button>
+          ) : <div />}
+          <button onClick={next} disabled={saving} style={{ background: T.accentDim, border: `1px solid ${T.accentBorder}`, borderRadius: 8, padding: "8px 22px", fontSize: 13, fontWeight: 600, color: saving ? T.faint : T.accent, cursor: saving ? "not-allowed" : "pointer" }}>
+            {saving ? "Setting up…" : step < 3 ? "Continue →" : "Get started →"}
+          </button>
+        </div>
       </div>
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
     </div>
   );
 }
@@ -297,19 +274,17 @@ function Onboarding({ serverUp, onRetry, onComplete }) {
 function Message({ role, text }) {
   const isUser = role === "user";
   const html = !isUser
-    ? text
-        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-        .replace(/#{1,3} (.*?)(\n|$)/g, "<strong>$1</strong>")
+    ? text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>").replace(/#{1,3} (.*?)(\n|$)/g, "<strong>$1</strong>")
     : null;
   return (
     <div style={{
       alignSelf: isUser ? "flex-end" : "flex-start",
       maxWidth: isUser ? "72%" : "85%",
-      background: isUser ? "#E1F5EE" : "#fff",
-      color: isUser ? "#0F6E56" : "#111",
-      border: isUser ? "1px solid #1D9E75" : "1px solid #e0e0e0",
-      borderRadius: isUser ? "12px 12px 2px 12px" : "2px 12px 12px 12px",
-      padding: "8px 13px", fontSize: 14, lineHeight: 1.6,
+      background: isUser ? T.accentDim : T.surface,
+      color: isUser ? T.accent : T.text,
+      border: `1px solid ${isUser ? T.accentBorder : T.border}`,
+      borderRadius: isUser ? "14px 14px 2px 14px" : "2px 14px 14px 14px",
+      padding: "9px 14px", fontSize: 14, lineHeight: 1.65,
       whiteSpace: "pre-wrap", wordBreak: "break-word",
     }}>
       {isUser ? text : <span dangerouslySetInnerHTML={{ __html: html }} />}
@@ -320,30 +295,23 @@ function Message({ role, text }) {
 // ── Typing indicator ──────────────────────────────────────────
 function Typing() {
   return (
-    <div style={{
-      alignSelf: "flex-start", background: "#fff",
-      border: "1px solid #e0e0e0", borderRadius: "2px 12px 12px 12px",
-      padding: "10px 14px", display: "flex", gap: 5,
-    }}>
+    <div style={{ alignSelf: "flex-start", background: T.surface, border: `1px solid ${T.border}`, borderRadius: "2px 14px 14px 14px", padding: "11px 16px", display: "flex", gap: 5 }}>
       {[0, 1, 2].map((i) => (
-        <span key={i} style={{
-          width: 6, height: 6, borderRadius: "50%", background: "#ccc",
-          display: "block", animation: `blink 1.2s ${i * 0.2}s infinite`,
-        }} />
+        <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: T.accent, display: "block", opacity: 0.4, animation: `blink 1.2s ${i * 0.2}s infinite` }} />
       ))}
-      <style>{`@keyframes blink{0%,60%,100%{opacity:.25}30%{opacity:1}}`}</style>
+      <style>{`@keyframes blink{0%,60%,100%{opacity:.2}30%{opacity:1}}`}</style>
     </div>
   );
 }
 
 // ── Chat UI ───────────────────────────────────────────────────
 function Chat({ config, onReset }) {
-  const tenantId = getTenantId();
-  const [sessionId]   = useState(() => newSessionId());
+  const tenantId       = getTenantId();
+  const [sessionId]    = useState(() => newSessionId());
   const { company, corridors, providers } = config;
-  const labels = corridors.map(corridorLabel);
+  const labels         = corridors.map(corridorLabel);
 
-  const welcome = `Hey! I'm FXAgent.\n\nI'm set up for ${company}. I can analyse your diaspora remittance corridors (${labels.join(", ")}), compare your providers (${providers.join(", ")}), track FX spreads and markup costs, and give you the NGN official vs parallel rate picture.\n\nWhat would you like to know?`;
+  const welcome = `Hey! I'm FXAgent 💱\n\nI'm set up for ${company}. I can analyse your diaspora remittance corridors (${labels.join(", ")}), compare your providers (${providers.join(", ")}), track FX spreads and markup costs, and give you the NGN official vs parallel rate picture.\n\nWhat would you like to know?`;
 
   const [msgs, setMsgs]       = useState([{ role: "agent", text: welcome }]);
   const [input, setInput]     = useState("");
@@ -362,8 +330,7 @@ function Chat({ config, onReset }) {
     setInput("");
     if (taRef.current) taRef.current.style.height = "auto";
     setMsgs((prev) => [...prev, { role: "user", text }]);
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
 
     try {
       const res = await fetch(`${API_BASE}/chat`, {
@@ -371,10 +338,7 @@ function Chat({ config, onReset }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, session_id: sessionId, tenant_id: tenantId }),
       });
-      if (!res.ok) {
-        const e = await res.json();
-        throw new Error(e.detail || "Server error");
-      }
+      if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Server error"); }
       const data = await res.json();
       setMsgs((prev) => [...prev, { role: "agent", text: data.answer }]);
     } catch (e) {
@@ -382,11 +346,9 @@ function Chat({ config, onReset }) {
       setError(isNetwork ? "disconnected" : e.message);
       setMsgs((prev) => [...prev, {
         role: "agent",
-        text: `⚠️ ${isNetwork ? "Server not reachable. Run: uvicorn server:app --reload --port 8000" : e.message}`,
+        text: `⚠️ ${isNetwork ? "Server not reachable. Check your connection or restart the backend." : e.message}`,
       }]);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   const autosize = (e) => {
@@ -394,124 +356,80 @@ function Chat({ config, onReset }) {
     e.target.style.height = Math.min(e.target.scrollHeight, 96) + "px";
   };
 
-  const handleReset = () => {
-    localStorage.removeItem("fx_tenant_id");
-    onReset();
-  };
+  const handleReset = () => { localStorage.removeItem("fx_tenant_id"); onReset(); };
 
   return (
-    <div style={{
-      display: "flex", height: "100vh", overflow: "hidden",
-      background: "#fff", fontFamily: "system-ui, sans-serif",
-    }}>
-      <style>{`* { box-sizing: border-box; } body { margin: 0; } textarea { outline: none; resize: none; }`}</style>
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: T.bg, fontFamily: "system-ui, sans-serif", color: T.text }}>
+      <style>{`*{box-sizing:border-box} body{margin:0} textarea{outline:none;resize:none} ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:${T.border2};border-radius:2px}`}</style>
 
       {/* Sidebar */}
-      <div style={{
-        width: 210, borderRight: "1px solid #e0e0e0",
-        display: "flex", flexDirection: "column",
-        background: "#fafafa", flexShrink: 0,
-      }}>
-        <div style={{ padding: "14px 14px 10px", borderBottom: "1px solid #e0e0e0" }}>
-          <div style={{ fontSize: 14, fontWeight: 500, color: "#111" }}>{company}</div>
-          <div style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace", marginTop: 2 }}>
-            FXAgent workspace
-          </div>
+      <div style={{ width: 220, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", background: T.surface, flexShrink: 0 }}>
+        <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{company}</div>
+          <div style={{ fontSize: 11, color: T.accent, fontFamily: "monospace", marginTop: 3 }}>FXAgent workspace</div>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px" }}>
-          <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
-            Active corridors
-          </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+          <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Active corridors</div>
           {labels.map((c, i) => (
-            <div key={i} style={{ fontSize: 13, color: "#555", padding: "3px 0", display: "flex", alignItems: "center", gap: 7 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#1D9E75", flexShrink: 0 }} />{c}
+            <div key={i} style={{ fontSize: 13, color: T.muted, padding: "3px 0", display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.accent, flexShrink: 0 }} />{c}
             </div>
           ))}
 
-          <div style={{ fontSize: 11, color: "#aaa", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6, marginTop: 14 }}>
-            Providers
-          </div>
+          <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8, marginTop: 16 }}>Providers</div>
           {providers.map((p) => (
-            <div key={p} style={{ fontSize: 13, color: "#555", padding: "3px 0", display: "flex", alignItems: "center", gap: 7 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#BA7517", flexShrink: 0 }} />{p}
+            <div key={p} style={{ fontSize: 13, color: T.muted, padding: "3px 0", display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.gold, flexShrink: 0 }} />{p}
             </div>
           ))}
         </div>
 
-        <div style={{ padding: "10px 14px", borderTop: "1px solid #e0e0e0" }}>
-          <button onClick={handleReset} style={{
-            background: "none", border: "none", color: "#aaa", fontSize: 12,
-            cursor: "pointer", fontFamily: "inherit",
-            display: "flex", alignItems: "center", gap: 5,
-          }}>⚙ Reset workspace</button>
+        <div style={{ padding: "10px 16px", borderTop: `1px solid ${T.border}` }}>
+          <button onClick={handleReset} style={{ background: "none", border: "none", color: T.faint, fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            ⚙ Reset workspace
+          </button>
         </div>
       </div>
 
-      {/* Main chat area */}
+      {/* Main chat */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <div style={{
-          padding: "12px 16px", borderBottom: "1px solid #e0e0e0",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
+        <div style={{ padding: "13px 20px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 500, color: "#111" }}>FXAgent</div>
-            <div style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace", marginTop: 2 }}>
-              Cross-border & diaspora remittance
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>FXAgent</div>
+            <div style={{ fontSize: 11, color: T.muted, fontFamily: "monospace", marginTop: 2 }}>Cross-border & diaspora remittance</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: error ? "#e53e3e" : "#aaa" }}>
-            <div style={{ width: 7, height: 7, borderRadius: "50%", background: error ? "#fc8181" : "#1D9E75" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: error ? T.red : T.muted }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: error ? T.red : T.accent, boxShadow: `0 0 6px ${error ? T.red : T.accent}` }} />
             {error ? "disconnected" : "live"}
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 0", display: "flex", flexDirection: "column", gap: 10 }}>
           {msgs.map((m, i) => <Message key={i} role={m.role} text={m.text} />)}
           {loading && <Typing />}
           <div ref={bottomRef} />
         </div>
 
         {msgs.length <= 1 && !loading && (
-          <div style={{ padding: "0 14px 8px", display: "flex", flexWrap: "wrap", gap: 5 }}>
+          <div style={{ padding: "8px 16px", display: "flex", flexWrap: "wrap", gap: 6 }}>
             {SUGGESTS.map((s, i) => (
-              <button key={i} onClick={() => send(s)} style={{
-                padding: "4px 10px", borderRadius: 20, border: "1px solid #ddd",
-                background: "#f9f9f9", color: "#555", fontSize: 12,
-                cursor: "pointer", fontFamily: "inherit",
-              }}>{s}</button>
+              <button key={i} onClick={() => send(s)} style={{ padding: "5px 12px", borderRadius: 20, border: `1px solid ${T.border2}`, background: T.surface, color: T.muted, fontSize: 12, cursor: "pointer" }}>{s}</button>
             ))}
           </div>
         )}
 
-        <div style={{
-          padding: "10px 14px", borderTop: "1px solid #e0e0e0",
-          display: "flex", gap: 8, alignItems: "flex-end",
-        }}>
+        <div style={{ padding: "12px 16px", borderTop: `1px solid ${T.border}`, display: "flex", gap: 8, alignItems: "flex-end", background: T.surface }}>
           <textarea
-            ref={taRef}
-            value={input}
+            ref={taRef} value={input}
             onChange={(e) => { setInput(e.target.value); autosize(e); }}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            rows={1}
-            placeholder="Ask about rates, corridors, providers…"
-            style={{
-              flex: 1, border: "1px solid #ddd", borderRadius: 8,
-              padding: "8px 11px", fontFamily: "inherit", fontSize: 14,
-              minHeight: 36, maxHeight: 96, background: "#fff", color: "#111",
-            }}
+            rows={1} placeholder="Ask about rates, corridors, providers…"
+            style={{ flex: 1, border: `1px solid ${T.border2}`, borderRadius: 10, padding: "9px 12px", fontSize: 14, minHeight: 38, maxHeight: 96, background: T.bg, color: T.text }}
           />
-          <button
-            onClick={() => send()}
-            disabled={loading || !input.trim()}
-            style={{
-              width: 36, height: 36, borderRadius: 8, border: "1px solid #ddd",
-              background: "#fff", fontSize: 16,
-              cursor: loading || !input.trim() ? "not-allowed" : "pointer",
-              opacity: loading || !input.trim() ? 0.35 : 1,
-              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-            }}
-          >→</button>
+          <button onClick={() => send()} disabled={loading || !input.trim()} style={{ width: 38, height: 38, borderRadius: 10, border: `1px solid ${T.border2}`, background: !loading && input.trim() ? T.accentDim : T.bg, fontSize: 16, cursor: loading || !input.trim() ? "not-allowed" : "pointer", opacity: loading || !input.trim() ? 0.3 : 1, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: T.accent }}>
+            →
+          </button>
         </div>
       </div>
     </div>
@@ -520,19 +438,24 @@ function Chat({ config, onReset }) {
 
 // ── Root app ──────────────────────────────────────────────────
 export default function App() {
-  const [config, setConfig] = useState(null);
-  const [ready, setReady]   = useState(false);
+  const [config, setConfig]     = useState(null);
+  const [ready, setReady]       = useState(false);
   const [serverUp, setServerUp] = useState(null);
+  const [waking, setWaking]     = useState(false);
 
   const checkServer = useCallback(async () => {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 8000);
+      // 60s timeout — Render free tier takes up to 50s to cold-start
+      const t = setTimeout(() => ctrl.abort(), 60000);
+      setWaking(true);
       const r = await fetch(`${API_BASE}/health`, { signal: ctrl.signal });
       clearTimeout(t);
+      setWaking(false);
       setServerUp(r.ok);
       return r.ok;
     } catch {
+      setWaking(false);
       setServerUp(false);
       return false;
     }
@@ -551,15 +474,17 @@ export default function App() {
   }, [checkServer]);
 
   if (!ready) return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "system-ui" }}>
-      <div style={{ color: "#aaa", fontSize: 14 }}>Loading…</div>
+    <div style={{ minHeight: "100vh", background: T.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "system-ui", gap: 16 }}>
+      <div style={{ width: 32, height: 32, border: `2px solid ${T.border2}`, borderTop: `2px solid ${T.accent}`, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+      {waking && <div style={{ color: T.muted, fontSize: 13 }}>Waking up server… (~30s on first load)</div>}
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 
   if (!config) return (
     <ErrorBoundary>
       <Onboarding
-        serverUp={serverUp}
+        serverUp={serverUp} waking={waking}
         onRetry={async () => { const up = await checkServer(); if (up) window.location.reload(); }}
         onComplete={(cfg) => setConfig(cfg)}
       />
