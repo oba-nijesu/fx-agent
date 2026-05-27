@@ -87,6 +87,7 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
   const [company, setCompany]     = useState("");
   const [corridors, setCorridors] = useState([]);
   const [providers, setProviders] = useState([]);
+  const [customPair, setCustomPair] = useState("");
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState("");
   const inputRef = useRef(null);
@@ -99,6 +100,13 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
     setCorridors((p) => p.includes(c) ? p.filter((x) => x !== c) : [...p, c]);
   const toggleProvider = (p) =>
     setProviders((p2) => p2.includes(p) ? p2.filter((x) => x !== p) : [...p2, p]);
+
+  const addCustomPair = () => {
+    const val = customPair.trim().toUpperCase().replace(/[→\-\s]+/g, ">");
+    if (!val || !val.includes(">")) return;
+    if (!corridors.includes(val)) setCorridors((p) => [...p, val]);
+    setCustomPair("");
+  };
 
   const finish = async () => {
     if (providers.length === 0) { setError("Select at least one provider."); return; }
@@ -128,7 +136,7 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
 
   const next = () => {
     if (step === 1 && !company.trim()) { setError("Please enter your company name."); return; }
-    if (step === 2 && corridors.length === 0) { setError("Select at least one corridor."); return; }
+    if (step === 2 && corridors.length === 0) { setError("Select at least one currency pair."); return; }
     if (step === 3) { finish(); return; }
     setError(""); setStep((s) => s + 1);
   };
@@ -143,7 +151,7 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
     }}>{label}</button>
   );
 
-  const stepLabels = ["Company", "Corridors", "Providers"];
+  const stepLabels = ["Company", "Currency Pairs", "Providers"];
 
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "system-ui, sans-serif" }}>
@@ -218,14 +226,38 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
         {step === 2 && (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div>
-              <h2 style={{ fontSize: 18, fontWeight: 600, color: T.text, margin: 0 }}>Your active corridors</h2>
-              <p style={{ fontSize: 14, color: T.muted, lineHeight: 1.6, marginTop: 8, marginBottom: 0 }}>Select every corridor your company operates.</p>
+              <h2 style={{ fontSize: 18, fontWeight: 600, color: T.text, margin: 0 }}>Your active currency pairs</h2>
+              <p style={{ fontSize: 14, color: T.muted, lineHeight: 1.6, marginTop: 8, marginBottom: 0 }}>Select every currency pair your company operates, or type a custom one.</p>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {CORRIDORS.map((c) => (
                 <Chip key={c.value} label={c.label} active={corridors.includes(c.value)} onClick={() => toggleCorridor(c.value)} />
               ))}
             </div>
+            {/* Custom pair input */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={customPair}
+                onChange={(e) => setCustomPair(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addCustomPair()}
+                placeholder="e.g. NGN>ZAR or GBP>USD"
+                style={{ flex: 1, padding: "7px 11px", fontSize: 13, borderRadius: 8, border: `1px solid ${T.border2}`, background: T.bg, color: T.text, fontFamily: "monospace" }}
+              />
+              <button onClick={addCustomPair} style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${T.accentBorder}`, background: T.accentDim, color: T.accent, fontSize: 13, cursor: "pointer" }}>
+                Add
+              </button>
+            </div>
+            {/* Custom pairs added */}
+            {corridors.filter(c => !CORRIDORS.find(x => x.value === c)).length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {corridors.filter(c => !CORRIDORS.find(x => x.value === c)).map((c) => (
+                  <div key={c} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, border: `1px solid ${T.accentBorder}`, background: T.accentDim, fontSize: 13, color: T.accent, fontFamily: "monospace" }}>
+                    {c}
+                    <button onClick={() => toggleCorridor(c)} style={{ background: "none", border: "none", color: T.accent, cursor: "pointer", fontSize: 14, padding: "0 0 0 4px", lineHeight: 1 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <p style={{ fontSize: 12, color: T.faint, margin: 0 }}>{corridors.length} selected</p>
           </div>
         )}
@@ -246,7 +278,7 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
             {providers.length > 0 && company && (
               <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "12px 14px", fontSize: 13, color: T.muted, lineHeight: 1.8 }}>
                 <strong style={{ color: T.text }}>{company}</strong><br />
-                Corridors: {corridors.map(corridorLabel).join(", ")}<br />
+                Currency pairs: {corridors.map(corridorLabel).join(", ")}<br />
                 Providers: {providers.join(", ")}
               </div>
             )}
@@ -370,7 +402,7 @@ function Chat({ config, onReset }) {
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
-          <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Active corridors</div>
+          <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Currency pairs</div>
           {labels.map((c, i) => (
             <div key={i} style={{ fontSize: 13, color: T.muted, padding: "3px 0", display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.accent, flexShrink: 0 }} />{c}
