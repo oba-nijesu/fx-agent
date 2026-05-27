@@ -958,10 +958,21 @@ function ChatUI({ companyName, onResetConfig }) {
         <div style={{ padding: "12px 20px 20px", borderTop: "1px solid #1a1a2a", background: "#0a0a14" }}>
           <div style={{ maxWidth: "720px", margin: "0 auto", display: "flex", gap: "10px", alignItems: "flex-end" }}>
             <div style={{ flex: 1, background: "#0f0f1e", border: "1px solid #252535", borderRadius: "14px", padding: "10px 14px" }}>
-              <textarea value={input} onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              <textarea value={input}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  e.target.style.height = "auto";
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`;
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                    e.target.style.height = "auto";
+                  }
+                }}
                 placeholder="Ask about rates, corridors, providers..." rows={1}
-                style={{ width: "100%", background: "transparent", border: "none", color: "#e0e0f0", fontSize: "14px", lineHeight: 1.5, fontFamily: "inherit", maxHeight: "100px", overflowY: "auto" }} />
+                style={{ width: "100%", background: "transparent", border: "none", color: "#e0e0f0", fontSize: "14px", lineHeight: 1.5, fontFamily: "inherit", height: "auto", maxHeight: "120px", overflowY: "auto" }} />
             </div>
             <button onClick={() => sendMessage()} disabled={loading || !input.trim()}
               style={{ width: "42px", height: "42px", borderRadius: "12px", background: loading || !input.trim() ? "#1a1a2e" : "linear-gradient(135deg, #00d4aa, #00a884)", border: "none", cursor: loading || !input.trim() ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", transition: "all 0.2s", flexShrink: 0, color: "#fff" }}>→</button>
