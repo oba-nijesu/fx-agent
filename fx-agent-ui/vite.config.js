@@ -8,4 +8,7 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
   },
+  resolve: {
+    dedupe: ['react', 'react-dom', 'react-is'],
+  },
 })
