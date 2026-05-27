@@ -1,10 +1,31 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, Component } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+// ── Error boundary — catches runtime crashes and shows a message ──
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) return (
+      <div style={{ minHeight: "100vh", background: "#08080f", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "monospace" }}>
+        <div style={{ color: "#ff5555", textAlign: "center", maxWidth: "480px", padding: "24px" }}>
+          <div style={{ fontSize: "28px", marginBottom: "12px" }}>⚠️</div>
+          <div style={{ color: "#e0e0f0", fontWeight: 600, marginBottom: "8px" }}>Something went wrong</div>
+          <div style={{ color: "#555", fontSize: "12px", marginBottom: "20px" }}>{this.state.error.message}</div>
+          <button onClick={() => window.location.reload()} style={{ background: "#00d4aa22", border: "1px solid #00d4aa44", color: "#00d4aa", padding: "8px 20px", borderRadius: "8px", cursor: "pointer", fontSize: "13px" }}>
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 
 // ── Static options (hardcoded — no server fetch needed) ───────
 const CORRIDOR_OPTIONS = [
@@ -953,7 +974,7 @@ function ChatUI({ companyName, onResetConfig }) {
 
 
 // ── Root app — manages onboarding state ───────────────────────
-export default function App() {
+function AppInner() {
   const [ready, setReady]             = useState(false);
   const [configured, setConfigured]   = useState(false);
   const [companyName, setCompanyName] = useState("");
@@ -961,7 +982,10 @@ export default function App() {
 
   const checkServer = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/health`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const r = await fetch(`${API_BASE}/health`, { signal: controller.signal });
+      clearTimeout(timeout);
       setServerUp(r.ok);
       return r.ok;
     } catch {
@@ -1001,5 +1025,13 @@ export default function App() {
       companyName={companyName}
       onResetConfig={() => { setConfigured(false); setCompanyName(""); }}
     />
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
