@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef, useCallback, Component } from "react";
+import {
+  LineChart, Line, BarChart, Bar,
+  XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -302,6 +307,115 @@ function Onboarding({ serverUp, waking, onRetry, onComplete }) {
   );
 }
 
+// ── Dashboard ─────────────────────────────────────────────────
+function Dashboard({ company }) {
+  const tenantId = getTenantId();
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/dashboard/${tenantId}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [tenantId]);
+
+  const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-GB", { maximumFractionDigits: 2 });
+
+  const ChartTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{ background: T.surface, border: `1px solid ${T.border2}`, borderRadius: 8, padding: "8px 12px" }}>
+        <div style={{ color: T.muted, fontSize: 11, marginBottom: 4 }}>{label}</div>
+        {payload.map((p, i) => (
+          <div key={i} style={{ color: p.color || T.accent, fontSize: 13, fontFamily: "monospace" }}>
+            {p.name}: {fmt(p.value)}{p.name.toLowerCase().includes("spread") ? "%" : ""}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const Card = ({ title, children }) => (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: "20px 24px" }}>
+      <div style={{ fontSize: 11, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 16 }}>{title}</div>
+      {children}
+    </div>
+  );
+
+  if (loading) return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: T.bg }}>
+      <div style={{ color: T.accent, fontFamily: "monospace", fontSize: 14 }}>Loading dashboard…</div>
+    </div>
+  );
+
+  if (!data) return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: T.bg }}>
+      <div style={{ color: T.red, fontSize: 14 }}>Failed to load dashboard data.</div>
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", background: T.bg, padding: "28px 32px", fontFamily: "system-ui, sans-serif" }}>
+      <style>{`::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:${T.border2};border-radius:2px}`}</style>
+      <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+
+        <div>
+          <h1 style={{ color: T.text, fontSize: 18, fontWeight: 600, margin: 0 }}>FX Intelligence Dashboard</h1>
+          <p style={{ color: T.faint, fontSize: 13, marginTop: 4, marginBottom: 0 }}>{company} · Last 90 days</p>
+        </div>
+
+        {/* Chart 2 — Avg spread trend */}
+        <Card title="Avg Spread — Last 30 Days">
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={data.spread_trend || []} margin={{ left: 0, right: 16, top: 4, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
+              <XAxis dataKey="date" tick={{ fill: T.faint, fontSize: 10 }} axisLine={false} tickLine={false}
+                tickFormatter={(d) => d?.slice(5)} interval="preserveStartEnd" />
+              <YAxis tick={{ fill: T.faint, fontSize: 11 }} axisLine={false} tickLine={false}
+                domain={["auto", "auto"]} tickFormatter={(v) => `${v}%`} />
+              <Tooltip content={<ChartTooltip />} />
+              <Line type="monotone" dataKey="avg_spread" name="Avg Spread"
+                stroke={T.accent} strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Chart 3 — Provider avg spread */}
+        <Card title="Provider Avg Spread">
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={data.providers || []} margin={{ left: 0, right: 16, top: 4, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
+              <XAxis dataKey="provider" tick={{ fill: T.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: T.faint, fontSize: 11 }} axisLine={false} tickLine={false}
+                tickFormatter={(v) => `${v}%`} />
+              <Tooltip content={<ChartTooltip />} />
+              <Bar dataKey="avg_spread" name="Avg Spread" fill="#7c6af7" radius={[4, 4, 0, 0]} opacity={0.85} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* Chart 4 — Markup cost by currency pair */}
+        <Card title="Markup Cost by Currency Pair">
+          <ResponsiveContainer width="100%" height={Math.max(200, (data.corridors?.length || 5) * 36)}>
+            <BarChart data={data.corridors || []} layout="vertical"
+              margin={{ left: 10, right: 24, top: 4, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={T.border} horizontal={false} />
+              <XAxis type="number" tick={{ fill: T.faint, fontSize: 11 }} axisLine={false} tickLine={false}
+                tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+              <YAxis type="category" dataKey="corridor" tick={{ fill: T.muted, fontSize: 11 }}
+                axisLine={false} tickLine={false} width={80} />
+              <Tooltip content={<ChartTooltip />} />
+              <Bar dataKey="markup_cost" name="Markup Cost" fill={T.gold} radius={[0, 4, 4, 0]} opacity={0.85} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+      </div>
+    </div>
+  );
+}
+
 // ── Message bubble ────────────────────────────────────────────
 function Message({ role, text }) {
   const isUser = role === "user";
@@ -340,6 +454,7 @@ function Typing() {
 function Chat({ config, onReset }) {
   const tenantId       = getTenantId();
   const [sessionId]    = useState(() => newSessionId());
+  const [view, setView]= useState("chat");
   const { company, corridors, providers } = config;
   const labels         = corridors.map(corridorLabel);
 
@@ -399,6 +514,18 @@ function Chat({ config, onReset }) {
         <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${T.border}` }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{company}</div>
           <div style={{ fontSize: 11, color: T.accent, fontFamily: "monospace", marginTop: 3 }}>FXAgent workspace</div>
+          {/* Tab toggle */}
+          <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
+            {["chat", "dashboard"].map((v) => (
+              <button key={v} onClick={() => setView(v)} style={{
+                flex: 1, padding: "5px 0", borderRadius: 7, fontSize: 11, cursor: "pointer",
+                background: view === v ? T.accentDim : "transparent",
+                border: `1px solid ${view === v ? T.accentBorder : T.border2}`,
+                color: view === v ? T.accent : T.faint,
+                fontWeight: view === v ? 600 : 400, transition: "all 0.15s",
+              }}>{v === "chat" ? "💬 Chat" : "📊 Dashboard"}</button>
+            ))}
+          </div>
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
@@ -424,8 +551,11 @@ function Chat({ config, onReset }) {
         </div>
       </div>
 
+      {/* Dashboard view */}
+      {view === "dashboard" && <Dashboard company={company} />}
+
       {/* Main chat */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      {view === "chat" && <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ padding: "13px 20px", borderBottom: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", background: T.surface }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>FXAgent</div>
@@ -463,7 +593,7 @@ function Chat({ config, onReset }) {
             →
           </button>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
