@@ -13,9 +13,12 @@ import os
 import json
 import sqlite3
 import random
+import smtplib
 import requests
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import dateparser
 from dotenv import load_dotenv
 
@@ -103,10 +106,16 @@ def init_db():
                 corridors          TEXT NOT NULL DEFAULT '[]',
                 providers          TEXT NOT NULL DEFAULT '[]',
                 spread_threshold   REAL NOT NULL DEFAULT 3.0,
+                alert_email        TEXT NOT NULL DEFAULT '',
                 created_at         TEXT NOT NULL,
                 updated_at         TEXT NOT NULL
             )
         """)
+        # Migration: add alert_email to existing databases
+        try:
+            conn.execute("ALTER TABLE tenant_config ADD COLUMN alert_email TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
 
 
 def log_transaction(
@@ -274,23 +283,25 @@ def save_tenant_config(
     corridors: list,
     providers: list,
     spread_threshold: float = 3.0,
+    alert_email: str = "",
 ):
     now = datetime.utcnow().isoformat()
     with get_db() as conn:
         conn.execute("""
             INSERT INTO tenant_config
-              (tenant_id, company_name, corridors, providers, spread_threshold, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+              (tenant_id, company_name, corridors, providers, spread_threshold, alert_email, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tenant_id) DO UPDATE SET
               company_name     = excluded.company_name,
               corridors        = excluded.corridors,
               providers        = excluded.providers,
               spread_threshold = excluded.spread_threshold,
+              alert_email      = excluded.alert_email,
               updated_at       = excluded.updated_at
         """, (
             tenant_id, company_name,
             json.dumps(corridors), json.dumps(providers),
-            spread_threshold, now, now,
+            spread_threshold, alert_email, now, now,
         ))
     # Invalidate cached agent for this tenant so it rebuilds with new config
     _tenant_agents.pop(tenant_id, None)
@@ -309,7 +320,168 @@ def get_tenant_config_db(tenant_id: str) -> dict | None:
     config = dict(row)
     config["corridors"] = json.loads(config["corridors"])
     config["providers"]  = json.loads(config["providers"])
+    config["alert_email"] = config.get("alert_email", "")
     return config
+
+
+# ════════════════════════════════════════════════════════════
+#  DASHBOARD DATA
+# ════════════════════════════════════════════════════════════
+
+def get_dashboard_data(corridors: list = None) -> dict:
+    """Return aggregated metrics for the visual dashboard."""
+    with get_db() as conn:
+        if corridors:
+            ph = ",".join("?" * len(corridors))
+            where = f"WHERE corridor IN ({ph})"
+            args = corridors
+        else:
+            where = ""
+            args = []
+
+        metrics = conn.execute(f"""
+            SELECT
+                COUNT(*)                                      AS total_transactions,
+                ROUND(SUM(amount_base), 2)                    AS total_volume,
+                ROUND(AVG(spread_pct), 3)                     AS avg_spread,
+                ROUND(SUM(amount_base * spread_pct / 100), 2) AS total_markup
+            FROM transactions {where}
+        """, args).fetchone()
+
+        corridor_rows = conn.execute(f"""
+            SELECT
+                corridor,
+                COUNT(*)                                      AS tx_count,
+                ROUND(SUM(amount_base), 2)                    AS volume,
+                ROUND(AVG(spread_pct), 3)                     AS avg_spread,
+                ROUND(SUM(amount_base * spread_pct / 100), 2) AS markup_cost
+            FROM transactions {where}
+            GROUP BY corridor ORDER BY volume DESC
+        """, args).fetchall()
+
+        if corridors:
+            trend_where = f"WHERE corridor IN ({ph}) AND timestamp >= DATE('now','-30 days')"
+        else:
+            trend_where = "WHERE timestamp >= DATE('now','-30 days')"
+
+        trend_rows = conn.execute(f"""
+            SELECT DATE(timestamp) AS date, ROUND(AVG(spread_pct), 3) AS avg_spread
+            FROM transactions {trend_where}
+            GROUP BY DATE(timestamp) ORDER BY date
+        """, args).fetchall()
+
+        provider_rows = conn.execute(f"""
+            SELECT
+                provider,
+                COUNT(*)                   AS tx_count,
+                ROUND(AVG(spread_pct), 3)  AS avg_spread,
+                ROUND(SUM(amount_base), 2) AS total_volume
+            FROM transactions {where}
+            GROUP BY provider ORDER BY avg_spread
+        """, args).fetchall()
+
+    return {
+        "metrics": dict(metrics) if metrics else {},
+        "corridors": [dict(r) for r in corridor_rows],
+        "spread_trend": [dict(r) for r in trend_rows],
+        "providers": [dict(r) for r in provider_rows],
+    }
+
+
+# ════════════════════════════════════════════════════════════
+#  EMAIL ALERTS
+# ════════════════════════════════════════════════════════════
+
+def send_alert_email(to_email: str, company_name: str, alerts: list):
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASS", "")
+    if not smtp_user or not smtp_pass:
+        return
+
+    rows = "".join(
+        f"<tr><td style='padding:8px 12px;border-bottom:1px solid #1a1a2a'><strong>{a['corridor']}</strong></td>"
+        f"<td style='padding:8px 12px;border-bottom:1px solid #1a1a2a;color:#ff5555'>{a['avg_spread']}%</td>"
+        f"<td style='padding:8px 12px;border-bottom:1px solid #1a1a2a;color:#888'>{a['threshold']}%</td></tr>"
+        for a in alerts
+    )
+    body = f"""
+    <div style="background:#08080f;color:#e0e0f0;font-family:'Segoe UI',sans-serif;padding:32px;max-width:560px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+        <span style="font-size:28px">💱</span>
+        <div>
+          <div style="font-weight:700;font-size:18px">FXAgent</div>
+          <div style="color:#00d4aa;font-size:11px;font-family:monospace">Spread Alert</div>
+        </div>
+      </div>
+      <p style="color:#aaa;margin-bottom:16px">
+        Hi <strong style="color:#fff">{company_name}</strong>, the following corridors have exceeded
+        your spread threshold in the last 24 hours:
+      </p>
+      <table style="width:100%;border-collapse:collapse;background:#0a0a14;border-radius:10px;overflow:hidden">
+        <thead>
+          <tr style="background:#141420">
+            <th style="padding:10px 12px;text-align:left;color:#555;font-size:11px;font-weight:500;text-transform:uppercase">Corridor</th>
+            <th style="padding:10px 12px;text-align:left;color:#555;font-size:11px;font-weight:500;text-transform:uppercase">Avg Spread</th>
+            <th style="padding:10px 12px;text-align:left;color:#555;font-size:11px;font-weight:500;text-transform:uppercase">Your Threshold</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <p style="margin-top:24px;color:#aaa;font-size:13px">
+        Log in to FXAgent to review your corridors and take action.
+      </p>
+      <p style="color:#333;font-size:11px;margin-top:32px">FXAgent · Nigerian Fintech Edition</p>
+    </div>
+    """
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"]    = smtp_user
+        msg["To"]      = to_email
+        msg["Subject"] = f"⚠️ FXAgent: {len(alerts)} corridor(s) exceeded spread threshold"
+        msg.attach(MIMEText(body, "html"))
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        print(f"📧 Alert sent to {to_email} for {len(alerts)} corridor(s)")
+    except Exception as e:
+        print(f"Email send failed: {e}")
+
+
+def check_spread_alerts():
+    """Run hourly — email tenants when any corridor spread exceeds their threshold."""
+    with get_db() as conn:
+        tenants = conn.execute("SELECT * FROM tenant_config").fetchall()
+
+    for tenant in tenants:
+        alert_email = tenant["alert_email"] or ""
+        if not alert_email:
+            continue
+        corridors     = json.loads(tenant["corridors"])
+        threshold     = tenant["spread_threshold"]
+        company_name  = tenant["company_name"]
+        if not corridors:
+            continue
+
+        alerts = []
+        with get_db() as conn:
+            for corridor in corridors:
+                row = conn.execute("""
+                    SELECT ROUND(AVG(spread_pct), 3) AS avg_spread, COUNT(*) AS tx_count
+                    FROM transactions
+                    WHERE corridor = ? AND timestamp >= DATETIME('now', '-24 hours')
+                """, (corridor,)).fetchone()
+                if row and row["tx_count"] > 0 and row["avg_spread"] > threshold:
+                    alerts.append({
+                        "corridor":   corridor,
+                        "avg_spread": row["avg_spread"],
+                        "threshold":  threshold,
+                    })
+
+        if alerts:
+            send_alert_email(alert_email, company_name, alerts)
 
 
 # ════════════════════════════════════════════════════════════

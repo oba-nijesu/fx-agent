@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from agent import (
     get_session_executor,
@@ -14,11 +15,19 @@ from agent import (
     delete_conversation_db,
     save_tenant_config,
     get_tenant_config_db,
+    get_dashboard_data,
+    check_spread_alerts,
+    log_transaction,
     _session_executors,
 )
 
 init_db()
 seed_demo_data()
+
+# ── Background scheduler ──────────────────────────────────────
+scheduler = BackgroundScheduler()
+scheduler.add_job(check_spread_alerts, "interval", hours=1, id="spread_alerts")
+scheduler.start()
 
 app = FastAPI(
     title="FXAgent API",
@@ -75,6 +84,16 @@ class TenantConfigRequest(BaseModel):
     corridors: List[str]
     providers: List[str]
     spread_threshold: float = 3.0
+    alert_email: str = ""
+
+class TransactionRequest(BaseModel):
+    corridor: str
+    amount_base: float
+    applied_rate: float
+    mid_market_rate: float
+    provider: str = "manual"
+    notes: str = ""
+    fee_usd: float = 0.0
 
 
 # ── Core routes ───────────────────────────────────────────────
@@ -153,5 +172,39 @@ def save_config(req: TenantConfigRequest):
         corridors=req.corridors,
         providers=req.providers,
         spread_threshold=req.spread_threshold,
+        alert_email=req.alert_email,
     )
     return {"status": "saved", "tenant_id": req.tenant_id}
+
+
+# ── Dashboard route ───────────────────────────────────────────
+
+@app.get("/dashboard/{tenant_id}")
+def get_dashboard(tenant_id: str):
+    config = get_tenant_config_db(tenant_id)
+    corridors = config.get("corridors") if config else None
+    return get_dashboard_data(corridors=corridors)
+
+
+# ── Transaction ingestion ─────────────────────────────────────
+
+@app.post("/transactions")
+def ingest_transaction(req: TransactionRequest):
+    try:
+        parts = req.corridor.upper().split(">")
+        if len(parts) != 2:
+            raise HTTPException(status_code=400, detail="corridor must be BASE>TARGET e.g. GBP>NGN")
+        base, target = parts
+        amount_target = round(req.amount_base * req.applied_rate, 4)
+        log_transaction(
+            base=base, target=target,
+            amount_base=req.amount_base, amount_target=amount_target,
+            mid_market_rate=req.mid_market_rate, applied_rate=req.applied_rate,
+            provider=req.provider, notes=req.notes, fee_usd=req.fee_usd,
+        )
+        spread_pct = round(abs((req.applied_rate - req.mid_market_rate) / req.mid_market_rate) * 100, 4)
+        return {"status": "logged", "corridor": req.corridor, "spread_pct": spread_pct}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

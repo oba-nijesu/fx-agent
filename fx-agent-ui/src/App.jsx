@@ -1,4 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer,
+} from "recharts";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
@@ -46,6 +50,7 @@ const WELCOME_MSG = (company) => ({
 function OnboardingScreen({ onComplete, serverUp, onRetryConnection }) {
   const [step, setStep]         = useState(1); // 1=company, 2=corridors, 3=providers, 4=threshold
   const [companyName, setCompanyName] = useState("");
+  const [alertEmail, setAlertEmail]   = useState("");
   const [corridors, setCorridors]     = useState([]);
   const [providers, setProviders]     = useState([]);
   const [threshold, setThreshold]     = useState("3.0");
@@ -78,6 +83,7 @@ function OnboardingScreen({ onComplete, serverUp, onRetryConnection }) {
           corridors,
           providers,
           spread_threshold: parseFloat(threshold) || 3.0,
+          alert_email: alertEmail.trim(),
         }),
       });
       if (!res.ok) throw new Error("Failed to save config.");
@@ -226,6 +232,25 @@ function OnboardingScreen({ onComplete, serverUp, onRetryConnection }) {
                 onChange={(e) => setCompanyName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && companyName.trim() && setStep(2)}
                 placeholder="e.g. Lemfi, Grey, Cleva..."
+                style={{
+                  width: "100%",
+                  background: "#0f0f1e",
+                  border: "1px solid #252535",
+                  borderRadius: "10px",
+                  padding: "12px 14px",
+                  color: "#e0e0f0",
+                  fontSize: "15px",
+                  fontFamily: "inherit",
+                }}
+              />
+              <label style={{ color: "#aaa", fontSize: "13px", display: "block", marginTop: "16px", marginBottom: "8px" }}>
+                Alert email <span style={{ color: "#555" }}>(optional — for spread alerts)</span>
+              </label>
+              <input
+                type="email"
+                value={alertEmail}
+                onChange={(e) => setAlertEmail(e.target.value)}
+                placeholder="treasury@yourcompany.com"
                 style={{
                   width: "100%",
                   background: "#0f0f1e",
@@ -392,9 +417,14 @@ function OnboardingScreen({ onComplete, serverUp, onRetryConnection }) {
                 <p style={{ color: "#e0e0f0", fontSize: "13px", marginBottom: "4px" }}>
                   <span style={{ color: "#00d4aa" }}>Providers:</span> {providers.join(", ")}
                 </p>
-                <p style={{ color: "#e0e0f0", fontSize: "13px" }}>
+                <p style={{ color: "#e0e0f0", fontSize: "13px", marginBottom: "4px" }}>
                   <span style={{ color: "#00d4aa" }}>Alert threshold:</span> {threshold}%
                 </p>
+                {alertEmail && (
+                  <p style={{ color: "#e0e0f0", fontSize: "13px" }}>
+                    <span style={{ color: "#00d4aa" }}>Alert email:</span> {alertEmail}
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -520,9 +550,184 @@ const TypingIndicator = () => (
 );
 
 
+// ── Dashboard ─────────────────────────────────────────────────
+function Dashboard({ companyName }) {
+  const tenantId = getTenantId();
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/dashboard/${tenantId}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [tenantId]);
+
+  const TEAL   = "#00d4aa";
+  const RED    = "#ff5555";
+  const DARK   = "#141420";
+  const BORDER = "#1a1a2a";
+
+  const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-GB", { maximumFractionDigits: 2 });
+
+  const MetricCard = ({ label, value, sub, accent }) => (
+    <div style={{
+      background: DARK, border: `1px solid ${BORDER}`, borderRadius: "12px",
+      padding: "20px 24px", flex: 1, minWidth: "160px",
+    }}>
+      <div style={{ color: "#555", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "8px" }}>{label}</div>
+      <div style={{ color: accent || TEAL, fontSize: "26px", fontWeight: 700, fontFamily: "monospace" }}>{value}</div>
+      {sub && <div style={{ color: "#444", fontSize: "11px", marginTop: "4px" }}>{sub}</div>}
+    </div>
+  );
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{ background: "#0a0a14", border: `1px solid ${BORDER}`, borderRadius: "8px", padding: "10px 14px" }}>
+        <div style={{ color: "#888", fontSize: "11px", marginBottom: "4px" }}>{label}</div>
+        {payload.map((p, i) => (
+          <div key={i} style={{ color: p.color || TEAL, fontSize: "13px", fontFamily: "monospace" }}>
+            {p.name}: {fmt(p.value)}{p.name.includes("spread") || p.name.includes("Spread") ? "%" : ""}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  if (loading) return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#08080f" }}>
+      <div style={{ color: TEAL, fontFamily: "monospace", fontSize: "14px" }}>Loading dashboard...</div>
+    </div>
+  );
+
+  if (!data) return (
+    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: "#08080f" }}>
+      <div style={{ color: "#ff5555", fontSize: "14px" }}>Failed to load dashboard data.</div>
+    </div>
+  );
+
+  const m = data.metrics || {};
+  const worstCorridor = data.corridors?.[0];
+  const bestProvider  = data.providers?.[0];
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", background: "#08080f", padding: "28px 32px", fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+      <div style={{ maxWidth: "1100px", margin: "0 auto" }}>
+
+        {/* Header */}
+        <div style={{ marginBottom: "28px" }}>
+          <h1 style={{ color: "#fff", fontSize: "20px", fontWeight: 700, margin: 0 }}>FX Intelligence Dashboard</h1>
+          <p style={{ color: "#444", fontSize: "13px", marginTop: "4px" }}>{companyName} · Last 90 days</p>
+        </div>
+
+        {/* Metric cards */}
+        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "28px" }}>
+          <MetricCard label="Total Transactions" value={fmt(m.total_transactions)} sub="across all corridors" />
+          <MetricCard label="Total Volume" value={fmt(m.total_volume)} sub="base currency units" />
+          <MetricCard label="Avg Spread" value={`${fmt(m.avg_spread)}%`} sub={m.avg_spread > 3 ? "⚠ above 3% threshold" : "within threshold"} accent={m.avg_spread > 3 ? RED : TEAL} />
+          <MetricCard label="Total Markup Cost" value={fmt(m.total_markup)} sub="revenue lost to spread" accent="#f0a500" />
+        </div>
+
+        {/* Charts row 1 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px" }}>
+
+          {/* Volume by corridor */}
+          <div style={{ background: DARK, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "20px" }}>
+            <div style={{ color: "#888", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "16px" }}>Volume by Corridor</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={data.corridors} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2a" horizontal={false} />
+                <XAxis type="number" tick={{ fill: "#444", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v/1000).toFixed(0)}k`} />
+                <YAxis type="category" dataKey="corridor" tick={{ fill: "#888", fontSize: 11 }} axisLine={false} tickLine={false} width={72} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="volume" name="Volume" fill={TEAL} radius={[0, 4, 4, 0]} opacity={0.85} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Spread trend */}
+          <div style={{ background: DARK, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "20px" }}>
+            <div style={{ color: "#888", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "16px" }}>Avg Spread — Last 30 Days</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={data.spread_trend} margin={{ left: 0, right: 16 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2a" />
+                <XAxis dataKey="date" tick={{ fill: "#444", fontSize: 10 }} axisLine={false} tickLine={false}
+                  tickFormatter={(d) => d?.slice(5)} interval="preserveStartEnd" />
+                <YAxis tick={{ fill: "#444", fontSize: 11 }} axisLine={false} tickLine={false}
+                  domain={["auto", "auto"]} tickFormatter={(v) => `${v}%`} />
+                <Tooltip content={<CustomTooltip />} />
+                <Line type="monotone" dataKey="avg_spread" name="Avg Spread" stroke={TEAL} strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Charts row 2 */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px" }}>
+
+          {/* Provider comparison */}
+          <div style={{ background: DARK, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "20px" }}>
+            <div style={{ color: "#888", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "16px" }}>Provider Avg Spread</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={data.providers} margin={{ left: 0, right: 16 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2a" vertical={false} />
+                <XAxis dataKey="provider" tick={{ fill: "#666", fontSize: 10 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#444", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="avg_spread" name="Avg Spread" fill="#7c6af7" radius={[4, 4, 0, 0]} opacity={0.85} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Markup cost by corridor */}
+          <div style={{ background: DARK, border: `1px solid ${BORDER}`, borderRadius: "12px", padding: "20px" }}>
+            <div style={{ color: "#888", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "16px" }}>Markup Cost by Corridor</div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={data.corridors} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1a1a2a" horizontal={false} />
+                <XAxis type="number" tick={{ fill: "#444", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v/1000).toFixed(0)}k`} />
+                <YAxis type="category" dataKey="corridor" tick={{ fill: "#888", fontSize: 11 }} axisLine={false} tickLine={false} width={72} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="markup_cost" name="Markup Cost" fill="#f0a500" radius={[0, 4, 4, 0]} opacity={0.85} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Insight strip */}
+        {(worstCorridor || bestProvider) && (
+          <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+            {worstCorridor && (
+              <div style={{ flex: 1, background: "#0a0a14", border: `1px solid ${BORDER}`, borderRadius: "10px", padding: "16px 20px" }}>
+                <div style={{ color: "#555", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>Highest Volume Corridor</div>
+                <div style={{ color: "#fff", fontSize: "16px", fontWeight: 600 }}>{worstCorridor.corridor}</div>
+                <div style={{ color: "#666", fontSize: "12px", marginTop: "4px" }}>
+                  {fmt(worstCorridor.tx_count)} transactions · avg spread {worstCorridor.avg_spread}% · markup cost {fmt(worstCorridor.markup_cost)}
+                </div>
+              </div>
+            )}
+            {bestProvider && (
+              <div style={{ flex: 1, background: "#0a0a14", border: `1px solid ${BORDER}`, borderRadius: "10px", padding: "16px 20px" }}>
+                <div style={{ color: "#555", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>Best Performing Provider</div>
+                <div style={{ color: TEAL, fontSize: "16px", fontWeight: 600 }}>{bestProvider.provider}</div>
+                <div style={{ color: "#666", fontSize: "12px", marginTop: "4px" }}>
+                  Lowest avg spread at {bestProvider.avg_spread}% · {fmt(bestProvider.tx_count)} transactions
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 // ── Main chat UI ──────────────────────────────────────────────
 function ChatUI({ companyName, onResetConfig }) {
   const tenantId = getTenantId();
+  const [view, setView]                   = useState("chat"); // "chat" | "dashboard"
   const [sessionId, setSessionId]         = useState(() => newSessionId());
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages]           = useState([WELCOME_MSG(companyName)]);
@@ -637,6 +842,17 @@ function ChatUI({ companyName, onResetConfig }) {
               <div style={{ color: "#444", fontSize: "10px", fontFamily: "monospace" }}>FXAgent workspace</div>
             </div>
           </div>
+          <div style={{ display: "flex", gap: "6px", marginBottom: "8px" }}>
+            {["chat", "dashboard"].map((v) => (
+              <button key={v} onClick={() => setView(v)} style={{
+                flex: 1, padding: "7px 0", borderRadius: "7px", fontSize: "12px", cursor: "pointer",
+                background: view === v ? "#00d4aa18" : "#0f0f1e",
+                border: `1px solid ${view === v ? "#00d4aa55" : "#252535"}`,
+                color: view === v ? "#00d4aa" : "#666", fontWeight: view === v ? 600 : 400,
+                transition: "all 0.15s",
+              }}>{v === "chat" ? "💬 Chat" : "📊 Dashboard"}</button>
+            ))}
+          </div>
           <button onClick={startNewChat} style={{ width: "100%", padding: "8px 12px", background: "#0f0f1e", border: "1px solid #252535", borderRadius: "8px", color: "#aaa", fontSize: "13px", cursor: "pointer", display: "flex", alignItems: "center", gap: "8px", transition: "all 0.15s" }}>
             <span style={{ fontSize: "16px" }}>+</span> New Chat
           </button>
@@ -672,8 +888,11 @@ function ChatUI({ companyName, onResetConfig }) {
         </div>
       </div>
 
+      {/* Dashboard view */}
+      {view === "dashboard" && <Dashboard companyName={companyName} />}
+
       {/* Main chat */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+      {view === "chat" && <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #1a1a2a", display: "flex", alignItems: "center", gap: "12px", background: "#0a0a14" }}>
           <div>
             <div style={{ color: "#fff", fontWeight: 600, fontSize: "15px" }}>FXAgent</div>
@@ -717,7 +936,7 @@ function ChatUI({ companyName, onResetConfig }) {
               style={{ width: "42px", height: "42px", borderRadius: "12px", background: loading || !input.trim() ? "#1a1a2e" : "linear-gradient(135deg, #00d4aa, #00a884)", border: "none", cursor: loading || !input.trim() ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", transition: "all 0.2s", flexShrink: 0, color: "#fff" }}>→</button>
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
