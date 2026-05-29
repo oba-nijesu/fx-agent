@@ -1303,6 +1303,73 @@ def ngn_market_overview(query: str = "") -> str:
 
 
 @tool
+def compare_providers(query: str = "") -> str:
+    """
+    ★ PROVIDER COMPARISON — Best & Worst Liquidity Providers ★
+    Ranks all providers by average spread across ALL corridors.
+    Use this when asked: "which provider gives the lowest/best rate?",
+    "who is the cheapest provider?", "compare our providers by spread",
+    "which provider should we use?", "best/worst provider".
+    Input: optional number of days e.g. "30" or "90". Defaults to 90.
+    Always returns the single BEST provider by name at the top.
+    """
+    try:
+        days = int(clean_input(query)) if query.strip().isdigit() else 90
+    except Exception:
+        days = 90
+
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    sql = """
+        SELECT
+            provider,
+            COUNT(*)                                       AS tx_count,
+            ROUND(AVG(spread_pct), 4)                      AS avg_spread,
+            ROUND(MIN(spread_pct), 4)                      AS best_spread,
+            ROUND(MAX(spread_pct), 4)                      AS worst_spread,
+            ROUND(SUM(amount_base), 2)                     AS total_volume,
+            ROUND(SUM(amount_base * spread_pct / 100), 2)  AS total_markup_cost,
+            GROUP_CONCAT(DISTINCT corridor)                AS corridors_used
+        FROM transactions
+        WHERE timestamp >= ?
+        GROUP BY provider
+        HAVING tx_count >= 1
+        ORDER BY avg_spread ASC
+    """
+    try:
+        with get_db() as conn:
+            rows = conn.execute(sql, (since,)).fetchall()
+
+        if not rows:
+            return f"No transaction data found in the last {days} days."
+
+        best  = rows[0]
+        worst = rows[-1]
+
+        lines = [
+            f"Provider Comparison by Avg Spread (last {days} days)",
+            f"{'─' * 58}",
+            f"BEST PROVIDER  : {best['provider']}  —  avg spread {best['avg_spread']:.3f}%",
+            f"WORST PROVIDER : {worst['provider']}  —  avg spread {worst['avg_spread']:.3f}%",
+            f"Saving by switching from worst to best: "
+            f"{worst['avg_spread'] - best['avg_spread']:.3f}% per transaction",
+            f"{'─' * 58}",
+            f"{'Provider':<16} {'Txns':>5} {'Avg Spread':>11} {'Best':>8} {'Worst':>8} {'Markup Cost':>13}",
+            f"{'─' * 58}",
+        ]
+        for r in rows:
+            lines.append(
+                f"{r['provider']:<16} {r['tx_count']:>5}  "
+                f"{r['avg_spread']:>9.3f}%  "
+                f"{r['best_spread']:>7.3f}%  "
+                f"{r['worst_spread']:>7.3f}%  "
+                f"{r['total_markup_cost']:>12,.2f}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@tool
 def diaspora_corridor_summary(query: str = "") -> str:
     """
     ★ NIGERIAN FINTECH — Diaspora Remittance Overview ★
@@ -1414,7 +1481,10 @@ PROMPT_TEMPLATE = (
     "- Use currency symbols: ₦ for NGN, £ for GBP, $ for USD, € for EUR, C$ for CAD.\n"
     "- Be analytical and direct. Nigerian fintech treasury teams want numbers, not fluff.\n"
     "- Use plain text only. Structure with line breaks and spacing, not markdown.\n"
-    "- For lists use a dash (-), never asterisks (*) or hashes (#).\n\n"
+    "- For lists use a dash (-), never asterisks (*) or hashes (#).\n"
+    "- When asked which provider is best/cheapest/lowest, ALWAYS name the specific provider "
+    "first (e.g. 'Wise gives you the lowest spread at 1.2%'), then show the full ranking.\n"
+    "- Never answer a 'which provider?' question by listing all providers without ranking them.\n\n"
     "Available tools:\n"
     "{tools}\n\n"
     "Use this EXACT format:\n\n"
@@ -1468,7 +1538,10 @@ def build_tenant_prompt(config: dict) -> PromptTemplate:
         "Formatting rules:\n"
         "- NEVER use markdown. No ## headers, no ** bold, no * bullets.\n"
         "- Lead with key insight, then supporting data.\n"
-        "- Plain text only. Use dashes (-) for lists.\n\n"
+        "- Plain text only. Use dashes (-) for lists.\n"
+        "- When asked which provider is best/cheapest/lowest, ALWAYS name the specific provider "
+        "first (e.g. 'Wise gives the lowest spread at 1.2%'), then show the full ranking.\n"
+        "- Never answer a 'which provider?' question by listing all providers without ranking them.\n\n"
         "Available tools:\n{tools}\n\n"
         "Use this EXACT format:\n\n"
         "Question: the input question\n"
