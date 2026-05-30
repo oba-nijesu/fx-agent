@@ -2029,18 +2029,23 @@ def route_optimizer(query: str) -> str:
 def generate_csv_link(query: str) -> str:
     """
     ★ CSV EXPORT — Generate a downloadable reconciliation CSV link ★
-    Use this whenever the user asks to:
-    - "download a CSV", "export transactions", "reconciliation log",
-    - "format as CSV for QuickBooks/Xero", "give me a downloadable file",
-    - "compile a reconciliation log", "export as CSV"
-    Always call this tool when a CSV/download is requested — never just narrate the data.
+
+    YOU MUST call this tool immediately — without calling any other tool first —
+    whenever the user asks for ANY of the following:
+      "download a CSV", "export transactions", "reconciliation log",
+      "format as CSV", "CSV for QuickBooks", "CSV for Xero",
+      "compile a reconciliation log", "give me a downloadable file",
+      "export as CSV", "downloadable CSV"
+
+    DO NOT call corridor_deep_dive, compare_providers, or any summary tool first.
+    Call THIS tool directly. It generates the download link. That IS the answer.
 
     Input format: "CORRIDOR PROVIDER START_DATE END_DATE"
     All parts optional. Use "all" to skip a filter.
     Examples:
       "GBP>NGN Stanbic IBTC 2026-05-01 2026-05-25"
       "all all 2026-05-01 2026-05-25"
-      "USD>NGN all 90"          (90 = days back, no specific dates)
+      "USD>NGN all 90"
       "all Wise 30"
       "GBP>NGN all 30"
     """
@@ -2213,8 +2218,9 @@ def build_tenant_prompt(config: dict) -> PromptTemplate:
         "- When asked which provider is best/cheapest/lowest, ALWAYS name the specific provider "
         "first (e.g. 'Wise gives the lowest spread at 1.2%'), then show the full ranking.\n"
         "- Never answer a 'which provider?' question by listing all providers without ranking them.\n"
-        "- When the user asks for a CSV, download, reconciliation log, or 'format for QuickBooks/Xero', "
-        "ALWAYS call generate_csv_link and return ONLY its output — never narrate the data as text.\n\n"
+        "- CRITICAL: When the user asks for a CSV, download, reconciliation log, or 'format for QuickBooks/Xero':\n"
+        "  Step 1 — call generate_csv_link immediately (no other tool first).\n"
+        "  Step 2 — return ONLY the tool output as your Final Answer. Do not narrate, summarise, or add text.\n\n"
         "Available tools:\n{tools}\n\n"
         "Use this EXACT format:\n\n"
         "Question: the input question\n"
@@ -2290,13 +2296,7 @@ def get_session_executor(session_id: str, tenant_id: str = "default") -> AgentEx
             verbose=True,
             max_iterations=35,
             max_execution_time=120,
-            handle_parsing_errors=(
-                "Format error. Use EXACTLY:\n"
-                "Thought: <your reasoning>\n"
-                "Action: <tool_name>\n"
-                "Action Input: <input>\n"
-                "Never skip the Action line after a Thought."
-            ),
+            handle_parsing_errors=True,
         )
     return _session_executors[key]
 
