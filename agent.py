@@ -579,6 +579,7 @@ def clean_input(query: str) -> str:
 
 
 def get_rate_raw(base: str, target: str):
+    # Direct fetch
     url = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/pair/{base}/{target}"
     try:
         r = requests.get(url, timeout=10)
@@ -586,6 +587,18 @@ def get_rate_raw(base: str, target: str):
         data = r.json()
         if data.get("result") == "success":
             return float(data["conversion_rate"])
+    except Exception:
+        pass
+    # Inverse fallback for currencies like NGN that can't be a base on the free tier
+    inv_url = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/pair/{target}/{base}"
+    try:
+        r = requests.get(inv_url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("result") == "success":
+            inverse = float(data["conversion_rate"])
+            if inverse:
+                return round(1 / inverse, 8)
     except Exception:
         pass
     return None
@@ -1899,11 +1912,22 @@ def route_optimizer(query: str) -> str:
         return "Could not parse input."
 
     def live_rate(b, t):
+        # Direct fetch
         try:
             url = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/pair/{b}/{t}"
             r = requests.get(url, timeout=8)
             if r.status_code == 200 and r.json().get("result") == "success":
                 return r.json()["conversion_rate"]
+        except Exception:
+            pass
+        # Inverse fallback — handles currencies like NGN that can't be a base on free tier
+        try:
+            url = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/pair/{t}/{b}"
+            r = requests.get(url, timeout=8)
+            if r.status_code == 200 and r.json().get("result") == "success":
+                inverse = r.json()["conversion_rate"]
+                if inverse and inverse != 0:
+                    return round(1 / inverse, 8)
         except Exception:
             pass
         return None
