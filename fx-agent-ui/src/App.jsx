@@ -450,26 +450,98 @@ function Typing() {
   );
 }
 
+// ── Relative time helper ──────────────────────────────────────
+const timeAgo = (iso) => {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "yesterday" : `${d}d ago`;
+};
+
 // ── Chat UI ───────────────────────────────────────────────────
 function Chat({ config, onReset }) {
-  const tenantId       = getTenantId();
-  const [sessionId]    = useState(() => newSessionId());
-  const [view, setView]= useState("chat");
+  const tenantId = getTenantId();
   const { company, corridors, providers } = config;
-  const labels         = corridors.map(corridorLabel);
+  const labels = corridors.map(corridorLabel);
 
   const welcome = `Hey! I'm FXAgent 💱\n\nI'm set up for ${company}. I can analyse your diaspora remittance corridors (${labels.join(", ")}), compare your providers (${providers.join(", ")}), track FX spreads and markup costs, and give you the NGN official vs parallel rate picture.\n\nWhat would you like to know?`;
 
-  const [msgs, setMsgs]       = useState([{ role: "agent", text: welcome }]);
-  const [input, setInput]     = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState(null);
+  const [sessionId, setSessionId] = useState(() => {
+    return localStorage.getItem("fx_session_id") || newSessionId();
+  });
+  const [view, setView]           = useState("chat");
+  const [msgs, setMsgs]           = useState([{ role: "agent", text: welcome }]);
+  const [input, setInput]         = useState("");
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+  const [convos, setConvos]       = useState([]);
+  const [histLoading, setHistLoading] = useState(true);
   const bottomRef = useRef(null);
   const taRef     = useRef(null);
+
+  // Persist session ID across refreshes
+  useEffect(() => {
+    localStorage.setItem("fx_session_id", sessionId);
+  }, [sessionId]);
+
+  // Load conversation list
+  const refreshConvos = useCallback(() => {
+    fetch(`${API_BASE}/conversations`)
+      .then((r) => r.json())
+      .then((list) => setConvos(Array.isArray(list) ? list : []))
+      .catch(() => {});
+  }, []);
+
+  // Load messages for current session on mount / session switch
+  useEffect(() => {
+    setHistLoading(true);
+    fetch(`${API_BASE}/conversations/${sessionId}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((rows) => {
+        if (rows.length > 0) {
+          setMsgs(rows.map((r) => ({
+            role: r.role === "assistant" ? "agent" : r.role,
+            text: r.content,
+          })));
+        } else {
+          setMsgs([{ role: "agent", text: welcome }]);
+        }
+      })
+      .catch(() => setMsgs([{ role: "agent", text: welcome }]))
+      .finally(() => setHistLoading(false));
+    refreshConvos();
+  }, [sessionId, refreshConvos]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs, loading]);
+
+  const startNewChat = () => {
+    const id = newSessionId();
+    setSessionId(id);
+    setError(null);
+    setInput("");
+    setView("chat");
+  };
+
+  const switchConvo = (id) => {
+    if (id === sessionId) return;
+    setSessionId(id);
+    setError(null);
+    setInput("");
+    setView("chat");
+  };
+
+  const deleteConvo = async (id, e) => {
+    e.stopPropagation();
+    await fetch(`${API_BASE}/conversations/${id}`, { method: "DELETE" }).catch(() => {});
+    if (id === sessionId) startNewChat();
+    refreshConvos();
+  };
 
   const send = async (override) => {
     const text = override || input.trim();
@@ -488,6 +560,7 @@ function Chat({ config, onReset }) {
       if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Server error"); }
       const data = await res.json();
       setMsgs((prev) => [...prev, { role: "agent", text: data.answer }]);
+      refreshConvos();
     } catch (e) {
       const isNetwork = e.message === "Failed to fetch" || e instanceof TypeError;
       setError(isNetwork ? "disconnected" : e.message);
@@ -503,18 +576,23 @@ function Chat({ config, onReset }) {
     e.target.style.height = Math.min(e.target.scrollHeight, 96) + "px";
   };
 
-  const handleReset = () => { localStorage.removeItem("fx_tenant_id"); onReset(); };
+  const handleReset = () => {
+    localStorage.removeItem("fx_tenant_id");
+    localStorage.removeItem("fx_session_id");
+    onReset();
+  };
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: T.bg, fontFamily: "system-ui, sans-serif", color: T.text }}>
-      <style>{`*{box-sizing:border-box} body{margin:0} textarea{outline:none;resize:none} ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:${T.border2};border-radius:2px}`}</style>
+      <style>{`*{box-sizing:border-box} body{margin:0} textarea{outline:none;resize:none} ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:${T.border2};border-radius:2px} .convo-item:hover .del-btn{opacity:1!important}`}</style>
 
       {/* Sidebar */}
-      <div style={{ width: 220, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", background: T.surface, flexShrink: 0 }}>
+      <div style={{ width: 240, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", background: T.surface, flexShrink: 0 }}>
+
+        {/* Header */}
         <div style={{ padding: "16px 16px 12px", borderBottom: `1px solid ${T.border}` }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>{company}</div>
           <div style={{ fontSize: 11, color: T.accent, fontFamily: "monospace", marginTop: 3 }}>FXAgent workspace</div>
-          {/* Tab toggle */}
           <div style={{ display: "flex", gap: 4, marginTop: 10 }}>
             {["chat", "dashboard"].map((v) => (
               <button key={v} onClick={() => setView(v)} style={{
@@ -528,20 +606,58 @@ function Chat({ config, onReset }) {
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
-          <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Currency pairs</div>
-          {labels.map((c, i) => (
-            <div key={i} style={{ fontSize: 13, color: T.muted, padding: "3px 0", display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.accent, flexShrink: 0 }} />{c}
-            </div>
-          ))}
+        {/* New chat button */}
+        <div style={{ padding: "10px 12px", borderBottom: `1px solid ${T.border}` }}>
+          <button onClick={startNewChat} style={{
+            width: "100%", padding: "7px 0", borderRadius: 8, fontSize: 12, cursor: "pointer",
+            background: T.accentDim, border: `1px solid ${T.accentBorder}`, color: T.accent, fontWeight: 600,
+          }}>+ New chat</button>
+        </div>
 
-          <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8, marginTop: 16 }}>Providers</div>
-          {providers.map((p) => (
-            <div key={p} style={{ fontSize: 13, color: T.muted, padding: "3px 0", display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 5, height: 5, borderRadius: "50%", background: T.gold, flexShrink: 0 }} />{p}
+        {/* Conversation history */}
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+          {convos.length > 0 && (
+            <div style={{ padding: "10px 12px 4px" }}>
+              <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>History</div>
+              {convos.map((c) => (
+                <div key={c.session_id} className="convo-item" onClick={() => switchConvo(c.session_id)}
+                  style={{
+                    display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+                    padding: "6px 8px", borderRadius: 7, cursor: "pointer", marginBottom: 2,
+                    background: c.session_id === sessionId ? T.accentDim : "transparent",
+                    border: `1px solid ${c.session_id === sessionId ? T.accentBorder : "transparent"}`,
+                    transition: "all 0.12s",
+                  }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: c.session_id === sessionId ? T.accent : T.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {c.title || "Chat"}
+                    </div>
+                    <div style={{ fontSize: 10, color: T.faint, marginTop: 2 }}>{timeAgo(c.updated_at)}</div>
+                  </div>
+                  <button className="del-btn" onClick={(e) => deleteConvo(c.session_id, e)}
+                    style={{ opacity: 0, background: "none", border: "none", color: T.faint, fontSize: 14, cursor: "pointer", padding: "0 0 0 4px", lineHeight: 1, transition: "opacity 0.15s", flexShrink: 0 }}>
+                    ×
+                  </button>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+
+          {/* Currency pairs & providers */}
+          <div style={{ padding: "10px 12px", marginTop: convos.length > 0 ? 0 : 0, borderTop: convos.length > 0 ? `1px solid ${T.border}` : "none" }}>
+            <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Currency pairs</div>
+            {labels.map((c, i) => (
+              <div key={i} style={{ fontSize: 12, color: T.muted, padding: "2px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 4, height: 4, borderRadius: "50%", background: T.accent, flexShrink: 0 }} />{c}
+              </div>
+            ))}
+            <div style={{ fontSize: 10, color: T.faint, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6, marginTop: 12 }}>Providers</div>
+            {providers.map((p) => (
+              <div key={p} style={{ fontSize: 12, color: T.muted, padding: "2px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 4, height: 4, borderRadius: "50%", background: T.gold, flexShrink: 0 }} />{p}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div style={{ padding: "10px 16px", borderTop: `1px solid ${T.border}` }}>
@@ -568,12 +684,15 @@ function Chat({ config, onReset }) {
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 0", display: "flex", flexDirection: "column", gap: 10 }}>
-          {msgs.map((m, i) => <Message key={i} role={m.role} text={m.text} />)}
+          {histLoading
+            ? <div style={{ color: T.faint, fontSize: 13, textAlign: "center", marginTop: 40 }}>Loading history…</div>
+            : msgs.map((m, i) => <Message key={i} role={m.role} text={m.text} />)
+          }
           {loading && <Typing />}
           <div ref={bottomRef} />
         </div>
 
-        {msgs.length <= 1 && !loading && (
+        {!histLoading && msgs.length <= 1 && !loading && (
           <div style={{ padding: "8px 16px", display: "flex", flexWrap: "wrap", gap: 6 }}>
             {SUGGESTS.map((s, i) => (
               <button key={i} onClick={() => send(s)} style={{ padding: "5px 12px", borderRadius: 20, border: `1px solid ${T.border2}`, background: T.surface, color: T.muted, fontSize: 12, cursor: "pointer" }}>{s}</button>
