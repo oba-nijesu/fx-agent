@@ -1619,26 +1619,61 @@ def slippage_analyzer(query: str = "") -> str:
     ★ SLIPPAGE ANALYSIS — Time-to-Settle Cost ★
     Analyzes the cost of rate movements between transaction initiation and settlement.
     Shows which providers have the worst settlement delays and slippage costs.
-    Use when asked: "show slippage data", "how much did settlement delays cost?",
-    "which provider has worst slippage?", "time-to-settle analysis", "settlement delay cost"
-    Input: optional "PROVIDER DAYS" e.g. "30", "Wise 90", "Access Bank 30", "all 30"
+    Can filter by minimum settlement hours and minimum slippage cost.
+
+    Use when asked:
+    - "show slippage data" / "settlement delay cost"
+    - "transactions where settlement took longer than X hours"
+    - "transactions with slippage exceeding $X" / "negative slippage above $500"
+    - "which provider has worst slippage?" / "time-to-settle analysis"
+    - "show me transactions this month where settlement took longer than 3 hours and slippage exceeded $500"
+
+    Input format (all parts optional):
+      "PROVIDER DAYS MIN_HOURS MIN_COST"
+    Examples:
+      "30"                          → all providers, last 30 days
+      "Verto FX 30"                 → Verto FX, last 30 days
+      "all 30 3 500"                → all providers, last 30 days, settled >3h, slippage >$500
+      "Access Bank 90 6 0"          → Access Bank, last 90 days, settled >6h, any slippage
+      "all 30 3 500"                → EXACTLY what to pass for "settlement >3h AND slippage >$500"
     """
     try:
         parts = clean_input(query).split()
-        days = 90
+        days = 30
         provider = "all"
-        if parts:
-            if parts[-1].isdigit():
-                days = int(parts[-1])
-                provider = " ".join(parts[:-1]) if len(parts) > 1 else "all"
-            else:
-                provider = " ".join(parts)
+        min_hours = 0.0
+        min_cost = 0.0
+
+        # Parse right-to-left: last two numeric tokens are min_cost, min_hours
+        # Second-to-last numeric is days, rest is provider
+        numeric_parts = []
+        text_parts = []
+        for p in parts:
+            try:
+                numeric_parts.append(float(p))
+            except ValueError:
+                text_parts.append(p)
+
+        if len(numeric_parts) >= 3:
+            min_cost   = numeric_parts[-1]
+            min_hours  = numeric_parts[-2]
+            days       = int(numeric_parts[-3])
+        elif len(numeric_parts) == 2:
+            min_hours  = numeric_parts[-1]
+            days       = int(numeric_parts[-2])
+        elif len(numeric_parts) == 1:
+            days = int(numeric_parts[0])
+
+        if text_parts and text_parts[0].lower() != "all":
+            provider = " ".join(text_parts)
     except Exception:
         pass
 
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
     provider_filter = "" if provider.lower() == "all" else "AND provider = ?"
-    args_base = [since] if provider.lower() == "all" else [since, provider]
+    hours_filter    = f"AND (JULIANDAY(settled_at) - JULIANDAY(initiated_at)) * 24 >= {min_hours}" if min_hours > 0 else ""
+    cost_filter     = f"AND ABS(settlement_rate - mid_market_rate) / mid_market_rate * amount_base >= {min_cost}" if min_cost > 0 else ""
+    args_base       = [since] if provider.lower() == "all" else [since, provider]
 
     sql_settled = f"""
         SELECT
@@ -1665,6 +1700,8 @@ def slippage_analyzer(query: str = "") -> str:
           AND initiated_at IS NOT NULL
           AND timestamp >= ?
           {provider_filter}
+          {hours_filter}
+          {cost_filter}
         ORDER BY slippage_cost DESC
     """
 
@@ -1687,15 +1724,19 @@ def slippage_analyzer(query: str = "") -> str:
             pending = conn.execute(sql_pending, args_base).fetchall()
 
         provider_label = provider if provider.lower() != "all" else "all providers"
+        filter_desc = []
+        if min_hours > 0: filter_desc.append(f"settlement >{min_hours}h")
+        if min_cost  > 0: filter_desc.append(f"slippage >${min_cost:,.0f}")
+        filter_label = f" | filters: {', '.join(filter_desc)}" if filter_desc else ""
 
         if not settled and not pending:
             return (
-                f"No slippage data found for {provider_label} in the last {days} days.\n"
+                f"No slippage data found for {provider_label} in the last {days} days{filter_label}.\n"
                 "Tip: Log settlement times via POST /transactions/settle to enable slippage tracking."
             )
 
         lines = [
-            f"Slippage Analysis — {provider_label} (last {days} days)",
+            f"Slippage Analysis — {provider_label} (last {days} days){filter_label}",
             f"{'─' * 66}",
         ]
 
@@ -2139,8 +2180,15 @@ def get_session_executor(session_id: str, tenant_id: str = "default") -> AgentEx
             tools=tools,
             memory=session_memory,
             verbose=True,
-            max_iterations=20,
-            handle_parsing_errors=True,
+            max_iterations=35,
+            max_execution_time=120,
+            handle_parsing_errors=(
+                "Format error. Use EXACTLY:\n"
+                "Thought: <your reasoning>\n"
+                "Action: <tool_name>\n"
+                "Action Input: <input>\n"
+                "Never skip the Action line after a Thought."
+            ),
         )
     return _session_executors[key]
 
