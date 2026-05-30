@@ -2025,6 +2025,88 @@ def route_optimizer(query: str) -> str:
     return "\n".join(lines)
 
 
+@tool
+def generate_csv_link(query: str) -> str:
+    """
+    ★ CSV EXPORT — Generate a downloadable reconciliation CSV link ★
+    Use this whenever the user asks to:
+    - "download a CSV", "export transactions", "reconciliation log",
+    - "format as CSV for QuickBooks/Xero", "give me a downloadable file",
+    - "compile a reconciliation log", "export as CSV"
+    Always call this tool when a CSV/download is requested — never just narrate the data.
+
+    Input format: "CORRIDOR PROVIDER START_DATE END_DATE"
+    All parts optional. Use "all" to skip a filter.
+    Examples:
+      "GBP>NGN Stanbic IBTC 2026-05-01 2026-05-25"
+      "all all 2026-05-01 2026-05-25"
+      "USD>NGN all 90"          (90 = days back, no specific dates)
+      "all Wise 30"
+      "GBP>NGN all 30"
+    """
+    import urllib.parse
+    parts  = clean_input(query).split()
+    corridor_val = None
+    provider_val = None
+    start_val    = None
+    end_val      = None
+    days_val     = 90
+
+    date_parts   = [p for p in parts if p.count("-") == 2 and len(p) == 10]
+    number_parts = [p for p in parts if p.isdigit()]
+    other_parts  = [p for p in parts if p not in date_parts and p not in number_parts]
+
+    if len(date_parts) >= 2:
+        start_val, end_val = date_parts[0], date_parts[1]
+    elif len(date_parts) == 1:
+        start_val = date_parts[0]
+
+    if number_parts:
+        days_val = int(number_parts[0])
+
+    # Split other_parts into corridor and provider
+    corridor_token = next((p for p in other_parts if ">" in p), None)
+    if corridor_token and corridor_token.lower() != "all":
+        corridor_val = corridor_token.upper()
+        other_parts  = [p for p in other_parts if p != corridor_token]
+
+    provider_candidates = [p for p in other_parts if p.lower() != "all"]
+    if provider_candidates:
+        provider_val = " ".join(provider_candidates)
+
+    # Get tenant ID from DB (use first tenant found as fallback)
+    tenant_id = "default"
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT tenant_id FROM tenant_config LIMIT 1").fetchone()
+            if row:
+                tenant_id = row["tenant_id"]
+    except Exception:
+        pass
+
+    api_base = os.getenv("API_BASE_URL", "https://fx-agent-p7a8.onrender.com")
+    params   = {}
+    if corridor_val: params["corridor"] = corridor_val
+    if provider_val: params["provider"] = provider_val
+    if start_val:    params["start"]    = start_val
+    if end_val:      params["end"]      = end_val
+    if not start_val and not end_val:
+        params["days"] = days_val
+
+    url = f"{api_base}/export/csv/{tenant_id}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+
+    label_parts = []
+    if corridor_val: label_parts.append(corridor_val)
+    if provider_val: label_parts.append(provider_val)
+    if start_val:    label_parts.append(f"{start_val} to {end_val or 'today'}")
+    elif days_val:   label_parts.append(f"last {days_val} days")
+    label = " | ".join(label_parts) if label_parts else "all transactions"
+
+    return f"CSV_DOWNLOAD_READY|{url}|{label}"
+
+
 # ════════════════════════════════════════════════════════════
 #  PROMPT
 # ════════════════════════════════════════════════════════════
@@ -2130,7 +2212,9 @@ def build_tenant_prompt(config: dict) -> PromptTemplate:
         "- Plain text only. Use dashes (-) for lists.\n"
         "- When asked which provider is best/cheapest/lowest, ALWAYS name the specific provider "
         "first (e.g. 'Wise gives the lowest spread at 1.2%'), then show the full ranking.\n"
-        "- Never answer a 'which provider?' question by listing all providers without ranking them.\n\n"
+        "- Never answer a 'which provider?' question by listing all providers without ranking them.\n"
+        "- When the user asks for a CSV, download, reconciliation log, or 'format for QuickBooks/Xero', "
+        "ALWAYS call generate_csv_link and return ONLY its output — never narrate the data as text.\n\n"
         "Available tools:\n{tools}\n\n"
         "Use this EXACT format:\n\n"
         "Question: the input question\n"

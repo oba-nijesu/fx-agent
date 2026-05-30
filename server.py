@@ -249,21 +249,40 @@ def settle(req: SettleRequest):
 # ── CSV export ────────────────────────────────────────────────
 
 @app.get("/export/csv/{tenant_id}")
-def export_csv(tenant_id: str, days: int = Query(default=90, ge=1, le=365)):
+def export_csv(
+    tenant_id: str,
+    days:      int          = Query(default=90, ge=1, le=365),
+    corridor:  Optional[str]= Query(default=None),
+    provider:  Optional[str]= Query(default=None),
+    start:     Optional[str]= Query(default=None),   # YYYY-MM-DD
+    end:       Optional[str]= Query(default=None),   # YYYY-MM-DD
+):
     """
-    Download a reconciliation CSV for a tenant's transactions.
+    Download a reconciliation CSV. Supports filtering by corridor, provider, and date range.
     Formatted for direct import into QuickBooks, Xero, or custom ledgers.
     """
-    config = get_tenant_config_db(tenant_id)
-    corridors = config.get("corridors") if config else None
+    conditions = []
+    args = []
 
-    if corridors:
-        ph = ",".join("?" * len(corridors))
-        where = f"WHERE corridor IN ({ph}) AND timestamp >= DATE('now', '-{days} days')"
-        args = corridors
-    else:
-        where = f"WHERE timestamp >= DATE('now', '-{days} days')"
-        args = []
+    if start:
+        conditions.append("DATE(timestamp) >= ?")
+        args.append(start)
+    elif not end:
+        conditions.append(f"timestamp >= DATE('now', '-{days} days')")
+
+    if end:
+        conditions.append("DATE(timestamp) <= ?")
+        args.append(end)
+
+    if corridor:
+        conditions.append("corridor = ?")
+        args.append(corridor.upper())
+
+    if provider:
+        conditions.append("provider = ?")
+        args.append(provider)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     sql = f"""
         SELECT
@@ -311,7 +330,13 @@ def export_csv(tenant_id: str, days: int = Query(default=90, ge=1, le=365)):
             ])
 
         output.seek(0)
-        filename = f"fxagent-reconciliation-{days}d.csv"
+        parts = []
+        if corridor: parts.append(corridor.replace(">", "-"))
+        if provider: parts.append(provider.replace(" ", "-"))
+        if start:    parts.append(start)
+        if end:      parts.append(f"to-{end}")
+        if not parts: parts.append(f"{days}d")
+        filename = f"fxagent-{'_'.join(parts)}.csv"
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",

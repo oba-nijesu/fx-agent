@@ -433,6 +433,37 @@ function Dashboard({ company }) {
 // ── Message bubble ────────────────────────────────────────────
 function Message({ role, text }) {
   const isUser = role === "user";
+
+  // Detect CSV download marker from agent
+  if (!isUser && text.startsWith("CSV_DOWNLOAD_READY|")) {
+    const [, url, label] = text.split("|");
+    return (
+      <div style={{
+        alignSelf: "flex-start", maxWidth: "85%",
+        background: T.surface, border: `1px solid ${T.border}`,
+        borderRadius: "2px 14px 14px 14px", padding: "12px 16px",
+        display: "flex", flexDirection: "column", gap: 10,
+      }}>
+        <div style={{ fontSize: 13, color: T.muted }}>
+          Your reconciliation CSV is ready:
+        </div>
+        <div style={{ fontSize: 12, color: T.faint, fontFamily: "monospace" }}>{label}</div>
+        <a
+          href={url}
+          download
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 7,
+            padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+            background: T.accentDim, border: `1px solid ${T.accentBorder}`,
+            color: T.accent, textDecoration: "none", alignSelf: "flex-start",
+          }}
+        >
+          ↓ Download CSV
+        </a>
+      </div>
+    );
+  }
+
   const html = !isUser
     ? text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>").replace(/#{1,3} (.*?)(\n|$)/g, "<strong>$1</strong>")
     : null;
