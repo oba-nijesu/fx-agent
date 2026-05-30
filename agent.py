@@ -204,19 +204,25 @@ def seed_demo_data():
         ("GBP", "ZAR",  23.4, 0.017),   # UK → South Africa
     ]
 
-    providers = ["Stanbic IBTC", "Access Bank", "Fidelity Bank", "Ecobank", "Verto FX", "Flutterwave", "Nium"]
+    # Each provider has a realistic typical settlement delay in hours
+    providers = {
+        "Stanbic IBTC": (4,  24),   # 4–24h
+        "Access Bank":  (6,  36),   # 6–36h
+        "Fidelity Bank":(8,  48),   # 8–48h
+        "Ecobank":      (4,  20),   # 4–20h
+        "Verto FX":     (2,  12),   # 2–12h (faster fintech)
+        "Flutterwave":  (1,   6),   # 1–6h  (fastest)
+        "Nium":         (2,   8),   # 2–8h
+    }
     base_date = datetime.utcnow() - timedelta(days=90)
 
     entries = []
     for day_offset in range(90):
         tx_date = base_date + timedelta(days=day_offset)
-        # 2-5 transactions per day
         for _ in range(random.randint(2, 5)):
             base, target, base_rate, avg_spread = random.choice(corridors)
-            # simulate rate drift ±3% over time
             drift = 1 + random.uniform(-0.03, 0.03)
             mid_rate = round(base_rate * drift, 6)
-            # spread varies ±50% around avg
             spread = avg_spread * random.uniform(0.5, 1.5)
             applied_rate = round(mid_rate * (1 - spread), 6)
             amount = round(random.uniform(1000, 100000), 2)
@@ -224,11 +230,22 @@ def seed_demo_data():
             fee = round(random.uniform(5, 50), 2)
             spread_pct = round(spread * 100, 4)
             corridor = f"{base}>{target}"
-            provider = random.choice(providers)
+            provider = random.choice(list(providers.keys()))
+
+            # Realistic settlement timing
+            min_h, max_h = providers[provider]
+            settle_hours = random.uniform(min_h, max_h)
+            initiated_at = tx_date.isoformat()
+            settled_at = (tx_date + timedelta(hours=settle_hours)).isoformat()
+            # Rate drifts slightly between initiation and settlement
+            rate_drift = 1 + random.uniform(-0.004, 0.004)
+            settlement_rate = round(mid_rate * rate_drift, 6)
+
             entries.append((
                 tx_date.isoformat(), base, target, corridor,
                 amount, received, mid_rate, applied_rate,
-                spread_pct, fee, provider, "demo"
+                spread_pct, fee, provider, "demo",
+                initiated_at, settled_at, settlement_rate,
             ))
 
     with get_db() as conn:
@@ -236,11 +253,51 @@ def seed_demo_data():
             INSERT INTO transactions
               (timestamp, base_currency, target_currency, corridor,
                amount_base, amount_target, mid_market_rate, applied_rate,
-               spread_pct, fee_usd, provider, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               spread_pct, fee_usd, provider, notes,
+               initiated_at, settled_at, settlement_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, entries)
 
     print(f"✅ Seeded {len(entries)} demo transactions across {len(corridors)} corridors.\n")
+
+
+def backfill_demo_settlement():
+    """
+    One-time backfill: add settlement data to existing demo rows that were seeded
+    before slippage tracking was added. Safe to call on every startup.
+    """
+    provider_delays = {
+        "Stanbic IBTC": (4,  24),
+        "Access Bank":  (6,  36),
+        "Fidelity Bank":(8,  48),
+        "Ecobank":      (4,  20),
+        "Verto FX":     (2,  12),
+        "Flutterwave":  (1,   6),
+        "Nium":         (2,   8),
+    }
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, timestamp, mid_market_rate, provider FROM transactions "
+            "WHERE notes = 'demo' AND settled_at IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        updates = []
+        for r in rows:
+            min_h, max_h = provider_delays.get(r["provider"], (4, 24))
+            settle_hours = random.uniform(min_h, max_h)
+            initiated_at = r["timestamp"]
+            settled_at = (
+                datetime.fromisoformat(r["timestamp"]) + timedelta(hours=settle_hours)
+            ).isoformat()
+            rate_drift = 1 + random.uniform(-0.004, 0.004)
+            settlement_rate = round(r["mid_market_rate"] * rate_drift, 6)
+            updates.append((initiated_at, settled_at, settlement_rate, r["id"]))
+        conn.executemany(
+            "UPDATE transactions SET initiated_at=?, settled_at=?, settlement_rate=? WHERE id=?",
+            updates
+        )
+    print(f"✅ Backfilled settlement data for {len(updates)} demo transactions.")
 
 
 # ════════════════════════════════════════════════════════════

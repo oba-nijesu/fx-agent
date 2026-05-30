@@ -23,11 +23,13 @@ from agent import (
     check_spread_alerts,
     log_transaction,
     get_db,
+    backfill_demo_settlement,
     _session_executors,
 )
 
 init_db()
 seed_demo_data()
+backfill_demo_settlement()
 
 # ── Background scheduler ──────────────────────────────────────
 scheduler = BackgroundScheduler()
