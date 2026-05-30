@@ -1303,6 +1303,103 @@ def ngn_market_overview(query: str = "") -> str:
 
 
 @tool
+def transactions_above_threshold(query: str) -> str:
+    """
+    ★ TRANSACTION AUDIT — Individual transactions exceeding a spread threshold ★
+    Lists every individual transaction where spread exceeded the threshold,
+    with exact markup cost calculated per transaction.
+    Use this when asked: "show transactions above X%", "which transactions exceeded threshold",
+    "show Access Bank transactions above 3%", "what was our exact loss on high-spread txns",
+    "transactions this month where markup exceeded threshold".
+    Input format: "PROVIDER THRESHOLD_PCT DAYS"
+    Examples: "Access Bank 3.0 30", "Wise 2.5 90", "all 3.0 30"
+    Use "all" as provider to search across all providers.
+    """
+    try:
+        parts = clean_input(query).split()
+        if len(parts) < 2:
+            return "Invalid format. Use: 'PROVIDER THRESHOLD_PCT DAYS' e.g. 'Access Bank 3.0 30'"
+        # Last part is days (optional), second-to-last is threshold, rest is provider
+        try:
+            days = int(parts[-1]) if parts[-1].isdigit() else 30
+            threshold = float(parts[-2]) if not parts[-1].isdigit() else float(parts[-2]) if len(parts) > 2 else float(parts[-1])
+            if parts[-1].isdigit() and len(parts) > 2:
+                provider = " ".join(parts[:-2])
+                threshold = float(parts[-2])
+            elif parts[-1].isdigit():
+                provider = parts[0]
+                threshold = float(parts[-2]) if len(parts) > 2 else 3.0
+            else:
+                provider = " ".join(parts[:-1])
+                threshold = float(parts[-1])
+                days = 30
+        except (ValueError, IndexError):
+            return "Could not parse. Use: 'PROVIDER THRESHOLD_PCT DAYS' e.g. 'Access Bank 3.0 30'"
+    except Exception:
+        return "Could not parse input."
+
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    provider_filter = "" if provider.lower() == "all" else "AND provider = ?"
+    args = [threshold, since] if provider.lower() == "all" else [threshold, since, provider]
+
+    sql = f"""
+        SELECT
+            DATE(timestamp)                                    AS date,
+            corridor,
+            provider,
+            ROUND(amount_base, 2)                              AS amount_base,
+            base_currency,
+            ROUND(applied_rate, 4)                             AS applied_rate,
+            ROUND(mid_market_rate, 4)                          AS mid_rate,
+            ROUND(spread_pct, 4)                               AS spread_pct,
+            ROUND(amount_base * spread_pct / 100, 2)           AS markup_cost,
+            ROUND(fee_usd, 2)                                  AS fee_usd
+        FROM transactions
+        WHERE spread_pct > ? AND timestamp >= ? {provider_filter}
+        ORDER BY markup_cost DESC
+    """
+
+    try:
+        with get_db() as conn:
+            rows = conn.execute(sql, args).fetchall()
+
+        provider_label = provider if provider.lower() != "all" else "all providers"
+
+        if not rows:
+            return (
+                f"No transactions found for {provider_label} "
+                f"with spread above {threshold}% in the last {days} days."
+            )
+
+        total_markup = sum(r["markup_cost"] for r in rows)
+        total_volume = sum(r["amount_base"] for r in rows)
+
+        lines = [
+            f"Transactions exceeding {threshold}% spread — {provider_label} (last {days} days)",
+            f"{'─' * 70}",
+            f"{'Date':<12} {'Corridor':<10} {'Provider':<14} {'Amount':>12} "
+            f"{'Spread':>8} {'Markup Cost':>13}",
+            f"{'─' * 70}",
+        ]
+        for r in rows:
+            lines.append(
+                f"{r['date']:<12} {r['corridor']:<10} {r['provider']:<14} "
+                f"{r['amount_base']:>10,.0f} {r['base_currency']}  "
+                f"{r['spread_pct']:>7.3f}%  "
+                f"{r['markup_cost']:>10,.2f} {r['base_currency']}"
+            )
+        lines += [
+            f"{'─' * 70}",
+            f"Transactions above threshold : {len(rows)}",
+            f"Total volume in these txns   : {total_volume:>14,.2f}",
+            f"TOTAL MARKUP COST (loss)     : {total_markup:>14,.2f}  ← exact cost above mid-market",
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@tool
 def compare_providers(query: str = "") -> str:
     """
     ★ PROVIDER COMPARISON — Best & Worst Liquidity Providers ★
