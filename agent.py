@@ -111,11 +111,17 @@ def init_db():
                 updated_at         TEXT NOT NULL
             )
         """)
-        # Migration: add alert_email to existing databases
-        try:
-            conn.execute("ALTER TABLE tenant_config ADD COLUMN alert_email TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
+        # Migrations — safe to run on every startup
+        for migration in [
+            "ALTER TABLE tenant_config ADD COLUMN alert_email TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE transactions ADD COLUMN initiated_at TEXT",
+            "ALTER TABLE transactions ADD COLUMN settled_at TEXT",
+            "ALTER TABLE transactions ADD COLUMN settlement_rate REAL",
+        ]:
+            try:
+                conn.execute(migration)
+            except Exception:
+                pass
 
 
 def log_transaction(
@@ -128,24 +134,37 @@ def log_transaction(
     provider: str = "manual",
     notes: str = "",
     fee_usd: float = 0.0,
+    initiated_at: str = None,
 ):
     """Save a conversion to the database."""
     spread_pct = ((mid_market_rate - applied_rate) / mid_market_rate) * 100
     corridor = f"{base}>{target}"
+    now = datetime.utcnow().isoformat()
     with get_db() as conn:
         conn.execute("""
             INSERT INTO transactions
               (timestamp, base_currency, target_currency, corridor,
                amount_base, amount_target, mid_market_rate, applied_rate,
-               spread_pct, fee_usd, provider, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               spread_pct, fee_usd, provider, notes, initiated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            datetime.utcnow().isoformat(),
+            now,
             base.upper(), target.upper(), corridor,
             amount_base, amount_target,
             mid_market_rate, applied_rate,
-            spread_pct, fee_usd, provider, notes
+            spread_pct, fee_usd, provider, notes,
+            initiated_at or now,
         ))
+
+
+def settle_transaction(transaction_id: int, settled_at: str, settlement_rate: float):
+    """Mark a transaction as settled with the final rate."""
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE transactions
+            SET settled_at = ?, settlement_rate = ?
+            WHERE id = ?
+        """, (settled_at, settlement_rate, transaction_id))
 
 
 def seed_demo_data():
@@ -1531,6 +1550,357 @@ def diaspora_corridor_summary(query: str = "") -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+# ════════════════════════════════════════════════════════════
+#  ★ FEATURE TOOLS — SLIPPAGE, BUFFER, ROUTE OPTIMIZER
+# ════════════════════════════════════════════════════════════
+
+@tool
+def slippage_analyzer(query: str = "") -> str:
+    """
+    ★ SLIPPAGE ANALYSIS — Time-to-Settle Cost ★
+    Analyzes the cost of rate movements between transaction initiation and settlement.
+    Shows which providers have the worst settlement delays and slippage costs.
+    Use when asked: "show slippage data", "how much did settlement delays cost?",
+    "which provider has worst slippage?", "time-to-settle analysis", "settlement delay cost"
+    Input: optional "PROVIDER DAYS" e.g. "30", "Wise 90", "Access Bank 30", "all 30"
+    """
+    try:
+        parts = clean_input(query).split()
+        days = 90
+        provider = "all"
+        if parts:
+            if parts[-1].isdigit():
+                days = int(parts[-1])
+                provider = " ".join(parts[:-1]) if len(parts) > 1 else "all"
+            else:
+                provider = " ".join(parts)
+    except Exception:
+        pass
+
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    provider_filter = "" if provider.lower() == "all" else "AND provider = ?"
+    args_base = [since] if provider.lower() == "all" else [since, provider]
+
+    sql_settled = f"""
+        SELECT
+            provider,
+            corridor,
+            DATE(initiated_at)                                      AS init_date,
+            DATE(settled_at)                                        AS settle_date,
+            ROUND(
+                (JULIANDAY(settled_at) - JULIANDAY(initiated_at)) * 24, 1
+            )                                                       AS hours_to_settle,
+            mid_market_rate                                         AS init_rate,
+            settlement_rate,
+            amount_base,
+            base_currency,
+            ROUND(
+                ABS(settlement_rate - mid_market_rate) / mid_market_rate * 100, 4
+            )                                                       AS rate_move_pct,
+            ROUND(
+                ABS(settlement_rate - mid_market_rate) / mid_market_rate * amount_base, 2
+            )                                                       AS slippage_cost
+        FROM transactions
+        WHERE settled_at IS NOT NULL
+          AND settlement_rate IS NOT NULL
+          AND initiated_at IS NOT NULL
+          AND timestamp >= ?
+          {provider_filter}
+        ORDER BY slippage_cost DESC
+    """
+
+    sql_pending = f"""
+        SELECT
+            provider,
+            COUNT(*) AS pending_count,
+            ROUND(AVG(amount_base), 0) AS avg_amount
+        FROM transactions
+        WHERE settled_at IS NULL
+          AND timestamp >= ?
+          {provider_filter}
+        GROUP BY provider
+        ORDER BY pending_count DESC
+    """
+
+    try:
+        with get_db() as conn:
+            settled = conn.execute(sql_settled, args_base).fetchall()
+            pending = conn.execute(sql_pending, args_base).fetchall()
+
+        provider_label = provider if provider.lower() != "all" else "all providers"
+
+        if not settled and not pending:
+            return (
+                f"No slippage data found for {provider_label} in the last {days} days.\n"
+                "Tip: Log settlement times via POST /transactions/settle to enable slippage tracking."
+            )
+
+        lines = [
+            f"Slippage Analysis — {provider_label} (last {days} days)",
+            f"{'─' * 66}",
+        ]
+
+        if settled:
+            total_slippage = sum(r["slippage_cost"] for r in settled)
+            avg_hours = sum(r["hours_to_settle"] for r in settled) / len(settled)
+            lines += [
+                f"Settled transactions : {len(settled)}",
+                f"Avg time to settle   : {avg_hours:.1f} hours",
+                f"TOTAL SLIPPAGE COST  : {total_slippage:,.2f} (base currency)",
+                f"{'─' * 66}",
+                f"{'Provider':<14} {'Corridor':<10} {'Hours':>6} {'Rate Move':>10} {'Slippage Cost':>14}",
+                f"{'─' * 66}",
+            ]
+            for r in settled:
+                lines.append(
+                    f"{r['provider']:<14} {r['corridor']:<10} "
+                    f"{r['hours_to_settle']:>6.1f}h  "
+                    f"{r['rate_move_pct']:>9.3f}%  "
+                    f"{r['slippage_cost']:>12,.2f} {r['base_currency']}"
+                )
+            lines.append(f"{'─' * 66}")
+
+        if pending:
+            lines.append(f"\nPending settlement (not yet settled):")
+            for r in pending:
+                lines.append(f"  {r['provider']:<16} {r['pending_count']} txns awaiting settlement")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@tool
+def buffer_calculator(query: str) -> str:
+    """
+    ★ SMART BUFFER CALCULATOR — Frontend Rate Safety Margin ★
+    Recommends the exact buffer % to add to your retail app's quoted rate
+    based on 30-day corridor volatility. Protects margin if the market moves
+    before the transaction settles.
+    Use when asked: "what buffer should we add?", "safety margin for our app rate",
+    "how much markup for our frontend?", "dynamic buffer for GBP NGN",
+    "what rate should we quote users?", "buffer recommendation"
+    Input: "BASE TARGET" e.g. "GBP NGN", "USD NGN", "EUR NGN"
+    """
+    try:
+        parts = clean_input(query).upper().split()
+        if len(parts) < 2:
+            return "Invalid format. Use: 'BASE TARGET' e.g. 'GBP NGN'"
+        base, target = parts[0], parts[1]
+    except Exception:
+        return "Could not parse input."
+
+    corridor = f"{base}>{target}"
+    daily_rates = []
+    source = ""
+
+    # Primary: use internal transaction data (most accurate for your actual corridors)
+    try:
+        with get_db() as conn:
+            rows = conn.execute("""
+                SELECT DATE(timestamp) AS date, ROUND(AVG(mid_market_rate), 6) AS avg_rate
+                FROM transactions
+                WHERE corridor = ? AND timestamp >= DATE('now', '-35 days')
+                GROUP BY DATE(timestamp)
+                ORDER BY date ASC
+            """, (corridor,)).fetchall()
+        if len(rows) >= 7:
+            daily_rates = [r["avg_rate"] for r in rows]
+            source = f"your last {len(rows)} days of {corridor} transaction data"
+    except Exception:
+        pass
+
+    # Fallback: Frankfurter (free, major currency pairs — not NGN)
+    if len(daily_rates) < 7:
+        try:
+            since = (datetime.utcnow() - timedelta(days=35)).strftime("%Y-%m-%d")
+            today = datetime.utcnow().strftime("%Y-%m-%d")
+            r = requests.get(
+                f"https://api.frankfurter.app/{since}..{today}?from={base}&to={target}",
+                timeout=10,
+            )
+            if r.status_code == 200:
+                rates_dict = r.json().get("rates", {})
+                sorted_dates = sorted(rates_dict.keys())
+                vals = [rates_dict[d][target] for d in sorted_dates if target in rates_dict[d]]
+                if len(vals) >= 7:
+                    daily_rates = vals
+                    source = f"Frankfurter historical rates ({len(vals)} trading days)"
+        except Exception:
+            pass
+
+    if len(daily_rates) < 5:
+        return (
+            f"Not enough rate history for {corridor} to calculate volatility.\n"
+            f"Need at least 5 days of data. Log more transactions on this corridor "
+            f"or ensure ExchangeRate API has historical data for {base}/{target}."
+        )
+
+    # Daily % returns
+    import statistics
+    daily_changes = [
+        abs((daily_rates[i] - daily_rates[i - 1]) / daily_rates[i - 1] * 100)
+        for i in range(1, len(daily_rates))
+    ]
+    daily_vol = statistics.stdev(daily_changes)
+    avg_daily_move = statistics.mean(daily_changes)
+
+    # Buffer by settlement window (vol scales with sqrt of time)
+    import math
+    buf_t1  = round(daily_vol * 1.0,              3)
+    buf_t2  = round(daily_vol * math.sqrt(2),     3)
+    buf_t4  = round(daily_vol * math.sqrt(4),     3)
+    buf_95  = round(daily_vol * 2.0,              3)   # 2-sigma ≈ 95% confidence
+
+    mid_example = {"NGN": 1570, "GHS": 15.5, "KES": 129, "ZAR": 18.5}.get(target, 100)
+    safe_quote = round(mid_example * (1 - buf_95 / 100), 2)
+
+    lines = [
+        f"Smart Buffer Calculator: {base} → {target}",
+        f"{'─' * 54}",
+        f"Data source       : {source}",
+        f"30-day daily vol  : {daily_vol:.3f}%  (avg daily move: {avg_daily_move:.3f}%)",
+        f"{'─' * 54}",
+        f"RECOMMENDED BUFFER: {buf_95:.3f}%  (2σ — covers 95% of daily moves)",
+        f"{'─' * 54}",
+        f"Buffer by settlement window:",
+        f"  Same day  (T+1) : {buf_t1:.3f}%",
+        f"  Next day  (T+2) : {buf_t2:.3f}%",
+        f"  Four days (T+4) : {buf_t4:.3f}%",
+        f"{'─' * 54}",
+        f"Example (mid-market = {mid_example:,} {target}/1 {base}):",
+        f"  Quote retail users: {safe_quote:,.2f} {target} per {base}",
+        f"  Buffer absorbs rate moves before your transaction settles.",
+        f"  If rate stays flat, the buffer is your extra margin.",
+    ]
+    return "\n".join(lines)
+
+
+@tool
+def route_optimizer(query: str) -> str:
+    """
+    ★ MULTI-HOP ROUTE OPTIMIZER ★
+    Finds the cheapest way to move money between two currencies by comparing
+    direct routing vs multi-hop routes through USD, EUR, or GBP as intermediaries.
+    Use when asked: "best way to move CAD to NGN?", "is routing via USD cheaper?",
+    "multi-hop vs direct", "optimize route", "cheapest route for BASE to TARGET",
+    "should I route through USD?", "route recommendation"
+    Input: "BASE TARGET AMOUNT" or "BASE TARGET" e.g. "CAD NGN 100000", "GBP KES"
+    """
+    if not EXCHANGERATE_API_KEY:
+        return "Error: EXCHANGERATE_API_KEY is not set."
+    try:
+        parts = clean_input(query).upper().split()
+        if len(parts) < 2:
+            return "Invalid format. Use: 'BASE TARGET AMOUNT' e.g. 'CAD NGN 100000'"
+        base, target = parts[0], parts[1]
+        amount = float(parts[2]) if len(parts) >= 3 else 10000.0
+    except Exception:
+        return "Could not parse input."
+
+    def live_rate(b, t):
+        try:
+            url = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/pair/{b}/{t}"
+            r = requests.get(url, timeout=8)
+            if r.status_code == 200 and r.json().get("result") == "success":
+                return r.json()["conversion_rate"]
+        except Exception:
+            pass
+        return None
+
+    def hist_avg_spread(b, t):
+        """Return avg historical spread % for a corridor from our DB, or 0 if no data."""
+        try:
+            with get_db() as conn:
+                row = conn.execute("""
+                    SELECT ROUND(AVG(spread_pct), 4) AS avg_spread
+                    FROM transactions
+                    WHERE corridor = ? AND timestamp >= DATE('now', '-90 days')
+                """, (f"{b}>{t}",)).fetchone()
+            return row["avg_spread"] or 0.0 if row else 0.0
+        except Exception:
+            return 0.0
+
+    # Direct route
+    direct_rate = live_rate(base, target)
+    direct_spread = hist_avg_spread(base, target)
+
+    routes = []
+    if direct_rate:
+        effective = direct_rate * (1 - direct_spread / 100)
+        received = round(amount * effective, 2)
+        routes.append({
+            "label": f"Direct: {base} → {target}",
+            "legs": 1,
+            "spread_total": direct_spread,
+            "rate": direct_rate,
+            "effective_rate": effective,
+            "received": received,
+            "note": f"Spread: {direct_spread:.3f}% (hist avg)" if direct_spread else "No historical spread data",
+        })
+
+    # Multi-hop routes via USD, EUR, GBP
+    hubs = [c for c in ["USD", "EUR", "GBP"] if c != base and c != target]
+    for hub in hubs:
+        r1 = live_rate(base, hub)
+        r2 = live_rate(hub, target)
+        if not r1 or not r2:
+            continue
+        s1 = hist_avg_spread(base, hub)
+        s2 = hist_avg_spread(hub, target)
+        combined_spread = s1 + s2
+        combined_rate = r1 * r2
+        effective = combined_rate * (1 - combined_spread / 100)
+        received = round(amount * effective, 2)
+        routes.append({
+            "label": f"Via {hub}: {base} → {hub} → {target}",
+            "legs": 2,
+            "spread_total": combined_spread,
+            "rate": combined_rate,
+            "effective_rate": effective,
+            "received": received,
+            "note": (
+                f"Leg 1 {base}>{hub}: {s1:.3f}% + Leg 2 {hub}>{target}: {s2:.3f}%"
+                if (s1 or s2) else "No historical spread data for this route"
+            ),
+        })
+
+    if not routes:
+        return f"Could not fetch live rates for {base} or {target}."
+
+    routes.sort(key=lambda x: x["received"], reverse=True)
+    best = routes[0]
+    worst = routes[-1]
+    saving = round(best["received"] - worst["received"], 2) if len(routes) > 1 else 0
+
+    lines = [
+        f"Route Optimizer: {base} → {target}  (amount: {amount:,.0f} {base})",
+        f"{'─' * 62}",
+        f"BEST ROUTE : {best['label']}",
+        f"  You receive: {best['received']:>14,.2f} {target}",
+        f"  Total spread: {best['spread_total']:.3f}%  |  {best['note']}",
+    ]
+    if saving > 0:
+        lines += [
+            f"{'─' * 62}",
+            f"Saving vs worst route: {saving:,.2f} {target}  ({(saving / (worst['received'] or 1) * 100):.2f}%)",
+            f"{'─' * 62}",
+            "All routes compared:",
+        ]
+        for i, route in enumerate(routes):
+            marker = " ← BEST" if i == 0 else (" ← WORST" if i == len(routes) - 1 else "")
+            lines.append(
+                f"  {route['label']:<32} "
+                f"→ {route['received']:>12,.2f} {target}  "
+                f"spread {route['spread_total']:.3f}%{marker}"
+            )
+    else:
+        lines.append(f"{'─' * 62}")
+        lines.append("Only one route available with live rate data.")
+
+    return "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════

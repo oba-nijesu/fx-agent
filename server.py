@@ -1,5 +1,8 @@
-from fastapi import FastAPI, HTTPException
+import csv
+import io
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8,6 +11,7 @@ from agent import (
     get_session_executor,
     init_db,
     seed_demo_data,
+    settle_transaction,
     upsert_conversation,
     save_message_to_db,
     list_conversations_db,
@@ -18,6 +22,7 @@ from agent import (
     get_dashboard_data,
     check_spread_alerts,
     log_transaction,
+    get_db,
     _session_executors,
 )
 
@@ -104,6 +109,12 @@ class TransactionRequest(BaseModel):
     provider: str = "manual"
     notes: str = ""
     fee_usd: float = 0.0
+    initiated_at: Optional[str] = None
+
+class SettleRequest(BaseModel):
+    transaction_id: int
+    settled_at: str
+    settlement_rate: float
 
 
 # ── Core routes ───────────────────────────────────────────────
@@ -211,10 +222,98 @@ def ingest_transaction(req: TransactionRequest):
             amount_base=req.amount_base, amount_target=amount_target,
             mid_market_rate=req.mid_market_rate, applied_rate=req.applied_rate,
             provider=req.provider, notes=req.notes, fee_usd=req.fee_usd,
+            initiated_at=req.initiated_at,
         )
         spread_pct = round(abs((req.applied_rate - req.mid_market_rate) / req.mid_market_rate) * 100, 4)
         return {"status": "logged", "corridor": req.corridor, "spread_pct": spread_pct}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Settlement endpoint ───────────────────────────────────────
+
+@app.post("/transactions/settle")
+def settle(req: SettleRequest):
+    """Mark a transaction as settled with the final rate and settlement time."""
+    try:
+        settle_transaction(req.transaction_id, req.settled_at, req.settlement_rate)
+        return {"status": "settled", "transaction_id": req.transaction_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── CSV export ────────────────────────────────────────────────
+
+@app.get("/export/csv/{tenant_id}")
+def export_csv(tenant_id: str, days: int = Query(default=90, ge=1, le=365)):
+    """
+    Download a reconciliation CSV for a tenant's transactions.
+    Formatted for direct import into QuickBooks, Xero, or custom ledgers.
+    """
+    config = get_tenant_config_db(tenant_id)
+    corridors = config.get("corridors") if config else None
+
+    if corridors:
+        ph = ",".join("?" * len(corridors))
+        where = f"WHERE corridor IN ({ph}) AND timestamp >= DATE('now', '-{days} days')"
+        args = corridors
+    else:
+        where = f"WHERE timestamp >= DATE('now', '-{days} days')"
+        args = []
+
+    sql = f"""
+        SELECT
+            id,
+            DATE(timestamp)         AS date,
+            corridor,
+            provider,
+            amount_base,
+            base_currency,
+            amount_target,
+            target_currency,
+            mid_market_rate,
+            applied_rate,
+            spread_pct,
+            ROUND(amount_base * spread_pct / 100, 4) AS markup_cost,
+            fee_usd,
+            notes,
+            initiated_at,
+            settled_at,
+            settlement_rate
+        FROM transactions
+        {where}
+        ORDER BY timestamp DESC
+    """
+
+    try:
+        with get_db() as conn:
+            rows = conn.execute(sql, args).fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "ID", "Date", "Corridor", "Provider",
+            "Amount (Base)", "Base Currency", "Amount (Target)", "Target Currency",
+            "Mid-Market Rate", "Applied Rate", "Spread %", "Markup Cost (Base)",
+            "Fee (USD)", "Notes", "Initiated At", "Settled At", "Settlement Rate",
+        ])
+        for r in rows:
+            writer.writerow([
+                r["id"], r["date"], r["corridor"], r["provider"],
+                r["amount_base"], r["base_currency"], r["amount_target"], r["target_currency"],
+                r["mid_market_rate"], r["applied_rate"], r["spread_pct"], r["markup_cost"],
+                r["fee_usd"], r["notes"], r["initiated_at"] or "", r["settled_at"] or "",
+                r["settlement_rate"] or "",
+            ])
+
+        output.seek(0)
+        filename = f"fxagent-reconciliation-{days}d.csv"
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

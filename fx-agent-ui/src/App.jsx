@@ -360,9 +360,23 @@ function Dashboard({ company }) {
       <style>{`::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:${T.border2};border-radius:2px}`}</style>
       <div style={{ maxWidth: 1000, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
 
-        <div>
-          <h1 style={{ color: T.text, fontSize: 18, fontWeight: 600, margin: 0 }}>FX Intelligence Dashboard</h1>
-          <p style={{ color: T.faint, fontSize: 13, marginTop: 4, marginBottom: 0 }}>{company} · Last 90 days</p>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+          <div>
+            <h1 style={{ color: T.text, fontSize: 18, fontWeight: 600, margin: 0 }}>FX Intelligence Dashboard</h1>
+            <p style={{ color: T.faint, fontSize: 13, marginTop: 4, marginBottom: 0 }}>{company} · Last 90 days</p>
+          </div>
+          <a
+            href={`${API_BASE}/export/csv/${tenantId}?days=90`}
+            download
+            style={{
+              padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+              border: `1px solid ${T.accentBorder}`, background: T.accentDim,
+              color: T.accent, textDecoration: "none", display: "flex", alignItems: "center", gap: 6,
+              whiteSpace: "nowrap",
+            }}
+          >
+            ↓ Export CSV
+          </a>
         </div>
 
         {/* Chart 2 — Avg spread trend */}
